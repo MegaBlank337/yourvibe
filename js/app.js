@@ -124,7 +124,8 @@
 
   const isLiked = id => !!S.likes[id];
   const isSub = name => !!S.subs[name];
-  const likesOf = v => (Number(v.likes) || 0) + (isLiked(v.id) ? 1 : 0);
+  /* like count lives on the server now — never add +1 locally */
+  const likesOf = v => Number(v.likes) || 0;
   const viewsOf = v => Number(v.views) || 0;
   const subsOfCreator = name => Number(CREATORS[name]) || 0;
   const agoOf = v => timeAgo(v.created_at ? Date.parse(v.created_at) : 0);
@@ -348,7 +349,7 @@
       + '<div class="ch-head">'
       + '<span class="ch-ava">' + avatarHTML(meCh(), 96) + '</span>'
       + '<div class="ch-id"><h1 class="ch-name-big">' + esc(c.name) + '</h1>'
-      + '<div class="ch-sub">' + fmtNum(totalViews) + ' views · ' + mine.length + ' upload' + (mine.length === 1 ? '' : 's') + '</div></div>'
+      + '<div class="ch-sub">' + (subsOfCreator(c.name) > 0 ? fmtNum(subsOfCreator(c.name)) + ' subscribers · ' : '') + fmtNum(totalViews) + ' views · ' + mine.length + ' upload' + (mine.length === 1 ? '' : 's') + '</div></div>'
       + '<div class="ch-actions"><a class="btn-neon" href="#/upload">＋ Upload</a>'
       + '<a class="pill-btn ghost" href="#/settings">⚙ Customize channel</a></div>'
       + '</div>'
@@ -461,7 +462,9 @@
       + '<div class="w-row">'
       + '<a class="ch-link" href="#/c/' + encodeURIComponent(v.uploader) + '">' + avatarHTML(up, 42)
       + '<div><div class="wl-name">' + esc(v.uploader) + '</div>'
-      + '<div class="wl-subs">' + (up.isMe ? 'your channel' : (subsOfCreator(v.uploader) ? fmtNum(subsOfCreator(v.uploader)) + ' subscribers' : 'creator on YourVibe')) + '</div></div></a>'
+      + '<div class="wl-subs">' + (subsOfCreator(v.uploader) > 0
+          ? fmtNum(subsOfCreator(v.uploader)) + ' subscribers'
+          : (up.isMe ? 'your channel' : 'creator on YourVibe')) + '</div></div></a>'
       + subBtnHTML(v.uploader)
       + '<span class="w-spacer"></span>'
       + likeGroupHTML(v)
@@ -802,7 +805,7 @@
     try {
       const r = await api('/api/videos/' + id + '/like', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ delta }) });
       v.likes = Number(r.likes) || 0;
-    } catch (e) { v.likes = (Number(v.likes) || 0) + Math.max(0, delta); }
+    } catch (e) { v.likes = Math.max(0, (Number(v.likes) || 0) + delta); }
     updateLikeUI(id);
   }
 
@@ -904,6 +907,7 @@
       + '<div class="admin-row"><input type="number" id="adminN_likes" value="500" min="0" max="1000000"><button class="pill-btn" data-admin="likes">❤️ + Likes</button></div>'
       + '<div class="admin-row"><input type="number" id="adminN_subs" value="1000" min="0" max="10000000"><button class="pill-btn" data-admin="subs">🔔 + Subscribers</button></div>'
       + '<div class="admin-row"><input type="number" id="adminN_comments" value="100" min="1" max="500"><button class="pill-btn" data-admin="comments">💬 + Random comments</button></div>'
+      + '<div class="admin-row"><input type="number" id="adminN_commentsru" value="100" min="1" max="500"><button class="pill-btn" data-admin="commentsru">🇷🇺 + Комменты (RU)</button></div>'
       + '</div>'
       + '<p class="muted-txt">Applies on the server — everyone sees it. Comments come from randomly generated accounts.</p>'
       + '</div></div>';
@@ -953,16 +957,17 @@
     const input = $('#adminN_' + kind);
     let n = parseInt(input && input.value, 10);
     if (!Number.isFinite(n) || n < 0) { toast('Enter a number', '⚠️'); return; }
-    if (kind === 'comments') n = Math.min(500, Math.max(1, n));
+    const endpoint = kind === 'commentsru' ? 'comments' : kind;
+    if (kind === 'comments' || kind === 'commentsru') n = Math.min(500, Math.max(1, n));
     else n = Math.min(10000000, Math.max(0, n));
 
-    const label = { views: 'views', likes: 'likes', subs: 'subscribers', comments: 'comments' }[kind];
+    const label = { views: 'views', likes: 'likes', subs: 'subscribers', comments: 'comments', commentsru: 'русских комментов' }[kind];
     toast('Adding ' + n + ' ' + label + '…', '⏳');
     try {
-      await api('/api/admin/video/' + id + '/' + kind, {
+      await api('/api/admin/video/' + id + '/' + endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
-        body: JSON.stringify({ n })
+        body: JSON.stringify(kind === 'commentsru' ? { n, lang: 'ru' } : { n })
       });
       await loadVideos();
       toast('Done — ' + n + ' ' + label + ' added ✅', '⚡');
@@ -1040,7 +1045,7 @@
           list.insertAdjacentHTML('afterbegin', cItemHTML(c));
         }
         const head = $('#cHead');
-        if (head) head.textContent = fmtNum(list ? list.querySelectorAll('.c-item').length + 1 : 1) + ' Comments';
+        if (head && list) head.textContent = fmtNum(list.querySelectorAll('.c-item').length) + ' Comments';
         toast('Comment posted', '💬');
       } catch (ex) {
         toast('Comment failed — server unreachable', '⚠️');
