@@ -129,6 +129,11 @@ async function migrate() {
     token text,
     created_at timestamptz default now()
   )`);
+  await q(`create table if not exists announcements (
+    id bigserial primary key,
+    text text not null,
+    created_at timestamptz default now()
+  )`);
   await q(`insert into storage.buckets (id, name, public)
            values ('media', 'media', true) on conflict (id) do nothing`);
   migrated = true;
@@ -299,7 +304,7 @@ app.post('/api/videos/:id/segment', uploadSeg.single('video'), async (req, res) 
     if (!f) return res.status(400).json({ error: 'no segment file' });
     const id = req.params.id;
     if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'bad id' });
-    const idx = Math.max(0, Math.min(9, parseInt((req.body && req.body.index) || '0', 10) || 0));
+    const idx = Math.max(0, Math.min(22, parseInt((req.body && req.body.index) || '0', 10) || 0));
     const p = partPath(id, idx);
     await sbPut(p, f.buffer, f.mimetype || 'video/mp4');
     res.json({ index: idx, size: f.size, url: pubUrl(p) });
@@ -333,7 +338,7 @@ app.post('/api/videos/complete', async (req, res) => {
     const b = req.body || {};
     const id = String(b.id || '');
     if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'bad id' });
-    const parts = Math.max(1, Math.min(10, parseInt(b.parts, 10) || 1));
+    const parts = Math.max(1, Math.min(23, parseInt(b.parts, 10) || 1));
 
     const sizes = [];
     for (let i = 0; i < parts; i++) sizes.push(await partSize(partPath(id, i)));
@@ -499,7 +504,35 @@ app.delete('/api/videos/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'db down' }); }
 });
 
+/* ── announcements (single active, admin-managed) ── */
+app.get('/api/announcement', async (req, res) => {
+  try {
+    const r = await q('select id, text, created_at from announcements order by id desc limit 1');
+    res.json(r.rows.length ? r.rows[0] : null);
+  } catch (e) { res.json(null); }
+});
+
 /* ── ADMIN (panel opens with F4 in the app) ── */
+app.post('/api/admin/announcement', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const text = String((req.body && req.body.text) || '').trim().slice(0, 300);
+    if (!text) return res.status(400).json({ error: 'empty announcement' });
+    await q('delete from announcements');
+    await q('insert into announcements (text) values ($1)', [text]);
+    const r = await q('select id, text, created_at from announcements order by id desc limit 1');
+    res.status(201).json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.delete('/api/admin/announcement', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    await q('delete from announcements');
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
 const RAND_ADJ = ['Neon', 'Cyber', 'Pixel', 'Glitch', 'Retro', 'Synth', 'Astro', 'Laser', 'Turbo', 'Hyper', 'Ultra', 'Quantum', 'Vapor', 'Chrome', 'Plasma'];
 const RAND_NOUN = ['Fox', 'Wolf', 'Tiger', 'Panda', 'Falcon', 'Viper', 'Phoenix', 'Ninja', 'Ghost', 'Wizard', 'Rider', 'Byte', 'Drifter', 'Nomad', 'Samurai'];
 const RAND_TEXTS = [
