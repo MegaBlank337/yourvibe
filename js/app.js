@@ -353,7 +353,7 @@
       + '<div class="ch-head">'
       + '<span class="ch-ava">' + avatarHTML(meCh(), 96) + '</span>'
       + '<div class="ch-id"><h1 class="ch-name-big">' + esc(c.name) + '</h1>'
-      + '<div class="ch-sub">' + (subsOfCreator(c.name) > 0 ? fmtNum(subsOfCreator(c.name)) + ' subscribers · ' : '') + fmtNum(totalViews) + ' views · ' + mine.length + ' upload' + (mine.length === 1 ? '' : 's') + '</div></div>'
+      + '<div class="ch-sub">' + fmtNum(subsOfCreator(myName())) + ' subscribers · ' + fmtNum(totalViews) + ' views · ' + mine.length + ' upload' + (mine.length === 1 ? '' : 's') + '</div></div>'
       + '<div class="ch-actions"><a class="btn-neon" href="#/upload">＋ Upload</a>'
       + '<a class="pill-btn ghost" href="#/settings">⚙ Customize channel</a></div>'
       + '</div>'
@@ -389,16 +389,22 @@
       + '<div class="ch-head">'
       + '<span class="ch-ava">' + avatarHTML({ name: n, colors: pal, isMe: n === S.myChannel.name }, 96) + '</span>'
       + '<div class="ch-id"><h1 class="ch-name-big">' + esc(n) + '</h1>'
-      + '<div class="ch-sub">' + (subsOfCreator(n) ? fmtNum(subsOfCreator(n)) + ' subscribers · ' : '') + vids.length + ' video' + (vids.length === 1 ? '' : 's') + '</div></div>'
+      + '<div class="ch-sub">' + fmtNum(subsOfCreator(n)) + ' subscribers · ' + vids.length + ' video' + (vids.length === 1 ? '' : 's') + '</div></div>'
       + subBtnHTML(n)
       + '</div>'
       + '<div class="ch-tabs">'
       + '<button class="tab-btn on" data-action="tab" data-tab="vids">🎬 Videos</button>'
+      + '<button class="tab-btn" data-action="tab" data-tab="about">💫 About</button>'
       + '</div>'
       + '<div class="tab-panel" data-panel="vids">'
       + (vids.length ? '<div class="cards">' + vids.map(cardHTML).join('') + '</div>'
         : emptyHTML('🎥', 'No uploads yet', 'This creator hasn\'t published anything yet.'))
       + '</div>'
+      + '<div class="tab-panel hide" data-panel="about">'
+      + '<div class="about-card"><h3>About ' + esc(n) + '</h3>'
+      + '<p>Creator on YourVibe ⚡</p>'
+      + '<div class="ch-stats"><span>🔔 ' + fmtNum(subsOfCreator(n)) + ' subscribers</span><span>🎬 ' + vids.length + ' video' + (vids.length === 1 ? '' : 's') + '</span><span>👁 ' + fmtNum(vids.reduce((a, v) => a + viewsOf(v), 0)) + ' total views</span></div>'
+      + '</div></div>'
       + '</div>';
   }
 
@@ -466,9 +472,7 @@
       + '<div class="w-row">'
       + '<a class="ch-link" href="#/c/' + encodeURIComponent(v.uploader) + '">' + avatarHTML(up, 42)
       + '<div><div class="wl-name">' + esc(v.uploader) + '</div>'
-      + '<div class="wl-subs">' + (subsOfCreator(v.uploader) > 0
-          ? fmtNum(subsOfCreator(v.uploader)) + ' subscribers'
-          : (up.isMe ? 'your channel' : 'creator on YourVibe')) + '</div></div></a>'
+      + '<div class="wl-subs">' + fmtNum(subsOfCreator(v.uploader)) + ' subscribers</div></div></a>'
       + subBtnHTML(v.uploader)
       + '<span class="w-spacer"></span>'
       + likeGroupHTML(v)
