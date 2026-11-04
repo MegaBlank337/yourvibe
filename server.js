@@ -40,8 +40,8 @@ const DB_URL = process.env.DATABASE_URL || '';
 /* ── CORS (static site calls this API cross-origin) ── */
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Key');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,PATCH,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Key, X-Auth, X-Upload-Offset');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -123,9 +123,35 @@ async function migrate() {
   )`);
   await q(`alter table videos add column if not exists parts int default 1`);
   await q(`alter table videos add column if not exists sizes jsonb default '[]'`);
+  await q(`create table if not exists users (
+    username text primary key,
+    pass_hash text not null,
+    token text,
+    created_at timestamptz default now()
+  )`);
   await q(`insert into storage.buckets (id, name, public)
            values ('media', 'media', true) on conflict (id) do nothing`);
   migrated = true;
+}
+
+/* ── auth helpers (scrypt, no external deps) ── */
+const hashPass = (pass) => {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return salt + ':' + crypto.scryptSync(pass, salt, 64).toString('hex');
+};
+const verifyPass = (pass, stored) => {
+  const [salt, key] = String(stored || '').split(':');
+  if (!salt || !key) return false;
+  const h = crypto.scryptSync(pass, salt, 64).toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(h), Buffer.from(key));
+};
+async function authUser(req) {
+  const token = req.get('x-auth');
+  if (!token || !/^[a-f0-9]{20,80}$/.test(token)) return null;
+  try {
+    const r = await q('select username from users where token = $1', [token]);
+    return r.rows.length ? r.rows[0].username : null;
+  } catch (e) { return null; }
 }
 
 /* retry migration until it works (DB may not be ready on first boot) */
@@ -164,6 +190,51 @@ const pubUrl = p => SB_URL + '/storage/v1/object/public/media/' + p;
 const num = v => Number(v) || 0;
 
 /* ── API ── */
+
+/* auth: signup / login / me / logout */
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const username = String((req.body && req.body.username) || '').trim().toLowerCase();
+    const password = String((req.body && req.body.password) || '');
+    if (!/^[a-z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'username must be 3-20 chars (letters, numbers, _)' });
+    if (password.length < 4) return res.status(400).json({ error: 'password must be at least 4 characters' });
+    const token = crypto.randomBytes(24).toString('hex');
+    try {
+      await q('insert into users (username, pass_hash, token) values ($1,$2,$3)', [username, hashPass(password), token]);
+    } catch (e) {
+      if (String(e.message || '').includes('duplicate key')) return res.status(409).json({ error: 'that username is taken' });
+      throw e;
+    }
+    res.status(201).json({ token, username });
+  } catch (e) { res.status(500).json({ error: 'signup failed' }); }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const username = String((req.body && req.body.username) || '').trim().toLowerCase();
+    const password = String((req.body && req.body.password) || '');
+    const r = await q('select username, pass_hash from users where username = $1', [username]);
+    if (!r.rows.length || !verifyPass(password, r.rows[0].pass_hash)) {
+      return res.status(401).json({ error: 'wrong username or password' });
+    }
+    const token = crypto.randomBytes(24).toString('hex');
+    await q('update users set token = $1 where username = $2', [token, username]);
+    res.json({ token, username });
+  } catch (e) { res.status(500).json({ error: 'login failed' }); }
+});
+
+app.get('/api/auth/me', async (req, res) => {
+  const username = await authUser(req);
+  if (!username) return res.status(401).json({ error: 'not logged in' });
+  res.json({ username });
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  const username = await authUser(req);
+  if (username) await q('update users set token = null where username = $1', [username]).catch(() => {});
+  res.json({ ok: true });
+});
+
 app.get('/api/health', async (req, res) => {
   try { await q('select 1'); res.json({ ok: true, migrated }); }
   catch (e) { res.status(500).json({ ok: false, error: e.message }); }
@@ -259,7 +330,9 @@ app.post('/api/videos/complete', async (req, res) => {
     const category = String(b.category || 'Other').slice(0, 30);
     const type = b.type === 'short' ? 'short' : 'video';
     const duration = String(b.duration || '').slice(0, 10);
-    const uploader = String(b.uploader || 'Anonymous').slice(0, 50);
+    /* logged-in users publish under their account name (can't be spoofed) */
+    const authName = await authUser(req);
+    const uploader = authName || String(b.uploader || 'Anonymous').slice(0, 50);
 
     await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes)
              values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
@@ -365,7 +438,8 @@ app.get('/api/videos/:id/comments', async (req, res) => {
 
 app.post('/api/videos/:id/comments', async (req, res) => {
   try {
-    const author = String((req.body && req.body.author) || 'Anonymous').slice(0, 50);
+    const authName = await authUser(req);
+    const author = authName || String((req.body && req.body.author) || 'Anonymous').slice(0, 50);
     const text = String((req.body && req.body.text) || '').trim().slice(0, 500);
     if (!text) return res.status(400).json({ error: 'empty comment' });
     const r = await q('insert into comments (video_id, author, text) values ($1,$2,$3) returning id, author, text, created_at',
@@ -377,10 +451,13 @@ app.post('/api/videos/:id/comments', async (req, res) => {
 app.delete('/api/videos/:id', async (req, res) => {
   try {
     const key = (req.body && req.body.del_key) || '';
-    const r = await q('select video_path, thumb_path, del_key, parts from videos where id = $1', [req.params.id]);
+    const r = await q('select video_path, thumb_path, del_key, parts, uploader from videos where id = $1', [req.params.id]);
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
     const row = r.rows[0];
-    if (!key || key !== row.del_key) return res.status(403).json({ error: 'wrong delete key' });
+    /* owner = matching delete key OR logged-in account that uploaded it */
+    const authName = await authUser(req);
+    const owner = (key && key === row.del_key) || (authName && authName === row.uploader);
+    if (!owner) return res.status(403).json({ error: 'not your video' });
     await q('delete from videos where id = $1', [req.params.id]); // cascades comments
     const parts = Math.max(1, Number(row.parts) || 1);
     for (let i = 0; i < parts; i++) {
