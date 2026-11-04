@@ -293,8 +293,27 @@ const RAND_TEXTS = [
   'my playlist needed this', 'grandma asked why the screen is pink and glowing',
 ];
 const randPick = arr => arr[crypto.randomInt(arr.length)];
-function randAccount() {
-  return randPick(RAND_ADJ) + randPick(RAND_NOUN) + (crypto.randomInt(10) < 4 ? '_' + crypto.randomInt(100) : '');
+
+/* ── Russian pool for the RU admin button ── */
+const RU_ADJ = ['Neon', 'Cyber', 'Pixel', 'Glitch', 'Retro', 'Synth', 'Laser', 'Turbo', 'Ultra', 'Vapor', 'Chrome', 'Plasma', 'Kiber', 'Neonovyi'];
+const RU_NOUN = ['Lis', 'Volk', 'Medved', 'Sokol', 'Zayac', 'Drakon', 'Kot', 'Barsuk', 'Enot', 'Voron', 'Belka', 'Tigr', 'Filin', 'Tuman'];
+const RU_TEXTS = [
+  'это огонь 🔥', 'алгоритм привёл меня сюда ⚡', 'смотрю в 3 ночи, вайбы топ 🌃',
+  'мгновенная классика 💯', 'лайк не глядя 👍', 'реплей уже 10 раз 🔁',
+  'неоновая эстетика 😍', 'дофамин утверждён ✅', 'сертифицированный бэнгер 🎧',
+  'неужели это реально 😳', 'мурашки по коже 🤯', 'подписался мгновенно 🔔',
+  'этот ролик заслуживает 1M просмотров', 'шедевр просто 🎨', 'сохранил в избранное ⭐',
+  'переслал другу 📤', 'буду смотреть до 2077', 'кино, чистое кино 🍿',
+  'первый 🥇', 'я был здесь до того, как это стало мейнстримом 😎',
+  'сервер старается на полную 💪', 'мне в плейлист, срочно!', 'бабушка спросила, почему экран розовый',
+  'лайк за старания ❤️', 'контент растёт не по дням 🔥', 'жду продолжения 👀', 'это база 🔥',
+  'лучшее, что я видел сегодня', 'звук на максимум 🎶', 'вау, просто вау 😍',
+];
+
+function randAccount(lang) {
+  const adj = lang === 'ru' ? RU_ADJ : RAND_ADJ;
+  const noun = lang === 'ru' ? RU_NOUN : RAND_NOUN;
+  return randPick(adj) + randPick(noun) + (crypto.randomInt(10) < 4 ? '_' + crypto.randomInt(100) : '');
 }
 
 app.post('/api/admin/video/:id/:action', async (req, res) => {
@@ -325,14 +344,16 @@ app.post('/api/admin/video/:id/:action', async (req, res) => {
 
     if (action === 'comments') {
       const count = Math.max(1, Math.min(500, Math.round(nRaw)));
+      const lang = (req.body && req.body.lang) === 'ru' ? 'ru' : 'en';
+      const pool = lang === 'ru' ? RU_TEXTS : RAND_TEXTS;
       const chunks = [], params = [];
       for (let i = 0; i < count; i++) {
         const b = i * 3;
         chunks.push(`($${b + 1}, $${b + 2}, $${b + 3})`);
-        params.push(req.params.id, randAccount(), randPick(RAND_TEXTS));
+        params.push(req.params.id, randAccount(lang), randPick(pool));
       }
       await q('insert into comments (video_id, author, text) values ' + chunks.join(','), params);
-      return res.json({ ok: true, inserted: count });
+      return res.json({ ok: true, inserted: count, lang });
     }
 
     return res.status(400).json({ error: 'unknown action' });
