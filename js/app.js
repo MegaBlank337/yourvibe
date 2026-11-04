@@ -623,7 +623,7 @@
   function viewUpload() {
     main.innerHTML = '<div class="page up-page">'
       + '<h1 class="page-title">Upload a video</h1>'
-      + '<p class="muted-txt">Your video is stored on the server — everyone can watch it. ~' + YV.PART_MB + ' MB per segment is <b>recommended</b> (not the max): bigger files are automatically split into ' + YV.PART_MB + ' MB segments. Up to ' + YV.MAX_MB + ' MB total.</p>'
+      + '<p class="muted-txt">Your video is stored on the server — everyone can watch it. ~' + YV.PART_MB + ' MB per segment is <b>recommended</b> (not the max): bigger files are automatically split into ' + YV.PART_MB + ' MB segments. Up to ' + YV.MAX_LABEL + ' total.</p>'
       + '<div class="up-grid">'
       + '<div class="dropzone" id="dz"><input type="file" id="fileIn" accept="video/*" hidden>'
       + '<div class="dz-ico">🎬</div>'
@@ -950,6 +950,36 @@
     }
   }
 
+  /* ═══════════ announcements (admin → everyone) ═══════════ */
+  let ANN = null;
+
+  async function loadAnnouncement() {
+    try { ANN = await api('/api/announcement'); } catch (e) { ANN = null; }
+    renderAnnouncement();
+  }
+
+  function renderAnnouncement() {
+    const bar = $('#announceBar');
+    if (!bar) return;
+    let dismissed = null;
+    try { dismissed = localStorage.getItem('yv_ann_dismissed'); } catch (e) {}
+    if (ANN && ANN.id && String(ANN.id) !== dismissed) {
+      bar.innerHTML = '<div class="announce-inner"><span class="ann-ico">📣</span>'
+        + '<span class="ann-text">' + esc(ANN.text) + '</span>'
+        + '<button class="ann-x" id="annDismiss" title="Dismiss">✕</button></div>';
+      document.body.classList.add('has-ann');
+      const x = $('#annDismiss');
+      if (x) x.onclick = () => {
+        try { localStorage.setItem('yv_ann_dismissed', String(ANN.id)); } catch (e) {}
+        bar.innerHTML = '';
+        document.body.classList.remove('has-ann');
+      };
+    } else {
+      bar.innerHTML = '';
+      document.body.classList.remove('has-ann');
+    }
+  }
+
   /* move guest uploads from this browser into the logged-in account */
   async function claimMyVideos(silent) {
     if (!S.auth || !S.auth.token) return 0;
@@ -1072,6 +1102,8 @@
       + '<div class="admin-row"><input type="number" id="adminN_comments" value="100" min="1" max="500"><button class="pill-btn" data-admin="comments">💬 + Random comments</button></div>'
       + '<div class="admin-row"><input type="number" id="adminN_commentsru" value="100" min="1" max="500"><button class="pill-btn" data-admin="commentsru">🇷🇺 + Комменты (RU)</button></div>'
       + '<div class="admin-row"><input type="text" id="adminTransferTo" maxlength="50" placeholder="account / creator name"><button class="pill-btn" data-admin="transfer">📦 Transfer video to name</button></div>'
+      + '<div class="admin-row"><input type="text" id="adminAnnText" maxlength="300" placeholder="📣 Announcement text (everyone sees it)"><button class="pill-btn" data-admin="announce">📣 Post</button></div>'
+      + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">announcement shows as a banner on the site</span><button class="pill-btn danger" data-admin="announce-clear">🗑 Remove announcement</button></div>'
       + '</div>'
       + '<p class="muted-txt">Applies on the server — everyone sees it. Comments come from randomly generated accounts.</p>'
       + '</div></div>';
@@ -1116,6 +1148,29 @@
   }
 
   async function adminAction(kind) {
+    if (kind === 'announce') {
+      const text = ($('#adminAnnText') && $('#adminAnnText').value || '').trim();
+      if (!text) { toast('Enter announcement text', '⚠️'); return; }
+      try {
+        await api('/api/admin/announcement', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
+          body: JSON.stringify({ text })
+        });
+        await loadAnnouncement();
+        toast('Announcement posted 📣', '✅');
+      } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
+    if (kind === 'announce-clear') {
+      try {
+        await api('/api/admin/announcement', { method: 'DELETE', headers: { 'X-Admin-Key': ADMIN_KEY } });
+        await loadAnnouncement();
+        toast('Announcement removed', '🗑');
+      } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
+
     const id = $('#adminVideoSel') && $('#adminVideoSel').value;
     if (!id) { toast('No video selected', '⚠️'); return; }
 
@@ -1298,6 +1353,7 @@
   renderMe();
   window.addEventListener('hashchange', navigate);
   navigate();
+  loadAnnouncement();
   /* if logged in, quietly pull any guest uploads into the account */
   claimMyVideos(true).then(moved => { if (moved > 0) navigate(); });
 })();
