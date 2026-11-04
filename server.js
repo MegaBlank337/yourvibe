@@ -121,6 +121,8 @@ async function migrate() {
     name text primary key,
     subs bigint default 0
   )`);
+  await q(`alter table videos add column if not exists parts int default 1`);
+  await q(`alter table videos add column if not exists sizes jsonb default '[]'`);
   await q(`insert into storage.buckets (id, name, public)
            values ('media', 'media', true) on conflict (id) do nothing`);
   migrated = true;
@@ -169,9 +171,12 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/api/videos', async (req, res) => {
   try {
-    const r = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,created_at
+    const r = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,created_at
                        from videos order by created_at desc limit 200`);
-    res.json(r.rows.map(row => Object.assign({}, row, { views: num(row.views), likes: num(row.likes) })));
+    res.json(r.rows.map(row => Object.assign({}, row, {
+      views: num(row.views), likes: num(row.likes),
+      parts: Math.max(1, Number(row.parts) || 1),
+    })));
   } catch (e) { res.status(500).json({ error: 'db down' }); }
 });
 
@@ -184,33 +189,71 @@ app.get('/api/creators', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'db down' }); }
 });
 
-const upload = multer({
+/* ── Segmented uploads (big videos are split client-side into ≤50MB segments,
+      stored as separate objects, and streamed back as ONE file via /stream) ── */
+const uploadSeg = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_MB * 1024 * 1024, files: 2 },
+  limits: { fileSize: MAX_MB * 1024 * 1024, files: 1 },
 });
 
-app.post('/api/videos', upload.fields([{ name: 'video', maxCount: 1 }, { name: 'thumb', maxCount: 1 }]), async (req, res) => {
+const partPath = (id, i) => `videos/${id}/part${i}.mp4`;
+
+app.post('/api/videos/:id/segment', uploadSeg.single('video'), async (req, res) => {
   try {
-    const f = req.files && req.files.video && req.files.video[0];
-    if (!f) return res.status(400).json({ error: 'no video file' });
-    if (f.size > MAX_MB * 1024 * 1024) return res.status(400).json({ error: 'file too big (max ' + MAX_MB + ' MB)' });
+    const f = req.file;
+    if (!f) return res.status(400).json({ error: 'no segment file' });
+    const id = req.params.id;
+    if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'bad id' });
+    const idx = Math.max(0, Math.min(9, parseInt((req.body && req.body.index) || '0', 10) || 0));
+    const p = partPath(id, idx);
+    await sbPut(p, f.buffer, f.mimetype || 'video/mp4');
+    res.json({ index: idx, size: f.size, url: pubUrl(p) });
+  } catch (e) {
+    console.error('segment error:', e.message);
+    res.status(500).json({ error: 'segment upload failed' });
+  }
+});
 
-    const id = crypto.randomUUID();
-    const vExt = (path.extname(f.originalname || '') || '.mp4').toLowerCase().replace(/[^.a-z0-9]/g, '') || '.mp4';
-    const videoPath = 'videos/' + id + vExt;
+async function partSize(objPath) {
+  try {
+    const r = await fetch(SB_URL + '/storage/v1/object/media/' + objPath, {
+      method: 'HEAD',
+      headers: { Authorization: 'Bearer ' + SB_KEY, apikey: SB_KEY },
+    });
+    const cl = Number(r.headers.get('content-length'));
+    if (r.ok && cl > 0) return cl;
+  } catch (e) {}
+  try {
+    const r = await fetch(SB_URL + '/storage/v1/object/media/' + objPath, {
+      headers: { Authorization: 'Bearer ' + SB_KEY, apikey: SB_KEY, Range: 'bytes=0-0' },
+    });
+    const cr = r.headers.get('content-range'); // bytes 0-0/TOTAL
+    if (cr) return Number(cr.split('/')[1]) || 0;
+  } catch (e) {}
+  return 0;
+}
 
-    await sbPut(videoPath, f.buffer, f.mimetype || 'video/mp4');
+app.post('/api/videos/complete', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const id = String(b.id || '');
+    if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'bad id' });
+    const parts = Math.max(1, Math.min(10, parseInt(b.parts, 10) || 1));
+
+    const sizes = [];
+    for (let i = 0; i < parts; i++) sizes.push(await partSize(partPath(id, i)));
+    if (!sizes[0]) return res.status(400).json({ error: 'segments missing — upload failed' });
 
     let thumbPath = null, thumbUrl = null;
-    const tf = req.files && req.files.thumb && req.files.thumb[0];
-    if (tf) {
+    const thumb = String(b.thumb || '');
+    if (thumb.startsWith('data:image/') && thumb.length < 2000000) {
       thumbPath = 'thumbs/' + id + '.jpg';
-      await sbPut(thumbPath, tf.buffer, tf.mimetype || 'image/jpeg');
+      await sbPut(thumbPath, Buffer.from(thumb.split(',')[1], 'base64'), 'image/jpeg');
       thumbUrl = pubUrl(thumbPath);
     }
 
-    const b = req.body || {};
     const delKey = crypto.randomBytes(16).toString('hex');
+    const videoPath = partPath(id, 0);
     const title = String(b.title || 'Untitled vibe').slice(0, 100);
     const description = String(b.description || '').slice(0, 2000);
     const category = String(b.category || 'Other').slice(0, 30);
@@ -218,16 +261,83 @@ app.post('/api/videos', upload.fields([{ name: 'video', maxCount: 1 }, { name: '
     const duration = String(b.duration || '').slice(0, 10);
     const uploader = String(b.uploader || 'Anonymous').slice(0, 50);
 
-    await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key)
-             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [id, title, description, category, type, duration, uploader, videoPath, thumbPath, pubUrl(videoPath), thumbUrl, delKey]);
+    await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [id, title, description, category, type, duration, uploader, videoPath, thumbPath, pubUrl(videoPath), thumbUrl, delKey, parts, JSON.stringify(sizes)]);
 
-    res.status(201).json({ id, video_url: pubUrl(videoPath), thumb_url: thumbUrl, del_key: delKey });
+    res.status(201).json({ id, video_url: pubUrl(videoPath), thumb_url: thumbUrl, del_key: delKey, parts });
   } catch (e) {
-    console.error('upload error:', e.message);
-    res.status(500).json({ error: 'upload failed' });
+    console.error('complete error:', e.message);
+    res.status(500).json({ error: 'publish failed' });
   }
 });
+
+/* ── Stream a (possibly multi-segment) video as ONE file with Range support ── */
+async function streamOut(req, res) {
+  try {
+    const r = await q('select video_path, parts, sizes from videos where id = $1', [req.params.id]);
+    if (!r.rows.length) { res.status(404).end(); return; }
+    const row = r.rows[0];
+    const parts = Math.max(1, Number(row.parts) || 1);
+    let sizes = [];
+    try { sizes = JSON.parse(row.sizes || '[]').map(Number); } catch (e) { sizes = []; }
+    const paths = [];
+    for (let i = 0; i < parts; i++) paths.push(row.video_path.replace(/part\d+\.mp4$/, 'part' + i + '.mp4'));
+
+    const authH = { Authorization: 'Bearer ' + SB_KEY, apikey: SB_KEY };
+    const pipe = async body => { for await (const chunk of body) { if (!res.write(chunk)) await new Promise(w => res.once('drain', w)); } };
+
+    const total = sizes.reduce((a, b) => a + (b || 0), 0);
+    const rangeH = req.headers.range;
+
+    if (!rangeH || !total) {
+      res.status(200);
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Type', 'video/mp4');
+      for (const p of paths) {
+        const rr = await fetch(SB_URL + '/storage/v1/object/media/' + p, { headers: authH });
+        if (rr.ok) await pipe(rr.body);
+      }
+      res.end();
+      return;
+    }
+
+    const m = /bytes=(\d*)-(\d*)/.exec(rangeH);
+    let start = m && m[1] ? parseInt(m[1], 10) : 0;
+    let end = (m && m[2]) ? parseInt(m[2], 10) : total - 1;
+    if (end >= total) end = total - 1;
+    if (start > end || start >= total) { res.status(416).setHeader('Content-Range', 'bytes */' + total).end(); return; }
+
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Length', String(end - start + 1));
+
+    let offset = 0;
+    let cursor = start;
+    for (let i = 0; i < paths.length && cursor <= end; i++) {
+      const size = sizes[i] || 0;
+      const segStart = offset, segEnd = offset + size - 1;
+      offset += size;
+      if (segEnd < cursor) continue;
+      const from = cursor - segStart;
+      const to = end - segStart;
+      const rr = await fetch(SB_URL + '/storage/v1/object/media/' + paths[i], {
+        headers: Object.assign({}, authH, { Range: `bytes=${from}-${to}` }),
+      });
+      if (rr.ok) await pipe(rr.body);
+      cursor = segEnd + 1;
+    }
+    res.end();
+  } catch (e) {
+    console.error('stream error:', e.message);
+    try { res.status(500).end(); } catch (x) {}
+  }
+}
+app.get('/stream/:id', streamOut);
+
+
 
 app.post('/api/videos/:id/like', async (req, res) => {
   try {
@@ -266,12 +376,19 @@ app.post('/api/videos/:id/comments', async (req, res) => {
 app.delete('/api/videos/:id', async (req, res) => {
   try {
     const key = (req.body && req.body.del_key) || '';
-    const r = await q('select video_path, thumb_path, del_key from videos where id = $1', [req.params.id]);
+    const r = await q('select video_path, thumb_path, del_key, parts from videos where id = $1', [req.params.id]);
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
     const row = r.rows[0];
     if (!key || key !== row.del_key) return res.status(403).json({ error: 'wrong delete key' });
     await q('delete from videos where id = $1', [req.params.id]); // cascades comments
-    await sbDelete(row.video_path);
+    const parts = Math.max(1, Number(row.parts) || 1);
+    for (let i = 0; i < parts; i++) {
+      if (/part\d+\.mp4$/.test(row.video_path)) {
+        await sbDelete(row.video_path.replace(/part\d+\.mp4$/, 'part' + i + '.mp4'));
+      } else if (i === 0) {
+        await sbDelete(row.video_path);
+      }
+    }
     if (row.thumb_path) await sbDelete(row.thumb_path);
     res.sendStatus(204);
   } catch (e) { res.status(500).json({ error: 'db down' }); }
