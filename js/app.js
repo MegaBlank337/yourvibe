@@ -129,7 +129,8 @@
   const viewsOf = v => Number(v.views) || 0;
   const subsOfCreator = name => Number(CREATORS[name]) || 0;
   const agoOf = v => timeAgo(v.created_at ? Date.parse(v.created_at) : 0);
-  const srcOf = v => v.video_url;
+  /* multi-segment videos stream through the API as one file */
+  const srcOf = v => (Number(v.parts) > 1) ? (API_BASE + '/stream/' + v.id) : v.video_url;
 
   function bumpView(v) {
     v.views = (Number(v.views) || 0) + 1;
@@ -615,7 +616,7 @@
   function viewUpload() {
     main.innerHTML = '<div class="page up-page">'
       + '<h1 class="page-title">Upload a video</h1>'
-      + '<p class="muted-txt">Your video is stored on the server — everyone on YourVibe can watch it. Max ' + YV.MAX_MB + ' MB.</p>'
+      + '<p class="muted-txt">Your video is stored on the server — everyone can watch it. ~' + YV.PART_MB + ' MB per segment is <b>recommended</b> (not the max): bigger files are automatically split into ' + YV.PART_MB + ' MB segments. Up to ' + YV.MAX_MB + ' MB total.</p>'
       + '<div class="up-grid">'
       + '<div class="dropzone" id="dz"><input type="file" id="fileIn" accept="video/*" hidden>'
       + '<div class="dz-ico">🎬</div>'
@@ -638,6 +639,7 @@
       + '<span class="muted-txt" id="thMsg">optional — auto-captured from the video if empty</span>'
       + '</div><div class="thumb-preview hide" id="thPrev"></div></div>'
       + '<div class="up-preview hide" id="upPrev"><video id="prevVid" controls muted playsinline></video><div class="up-meta" id="upMeta"></div></div>'
+      + '<div class="progress-wrap hide" id="upProg"><div class="progress-label" id="upProgLbl">Uploading…</div><div class="progress-bar"><div class="progress-fill" id="upProgFill"></div></div></div>'
       + '<div class="form-err" id="upErr"></div>'
       + '<button class="btn-neon publish" id="publish" type="submit" disabled>🚀 Publish</button>'
       + '</form></div></div>';
@@ -663,7 +665,8 @@
       err(''); file = f;
       if (objUrl) URL.revokeObjectURL(objUrl);
       objUrl = URL.createObjectURL(f);
-      dzName.textContent = '📦 ' + f.name + ' (' + fmtSize(f.size) + ')';
+      const segCount = Math.max(1, Math.ceil(f.size / (YV.PART_MB * 1024 * 1024)));
+      dzName.textContent = '📦 ' + f.name + ' (' + fmtSize(f.size) + (segCount > 1 ? ' → ' + segCount + ' segments' : '') + ')';
       dz.classList.add('has');
       prevWrap.classList.remove('hide');
       prevVid.src = objUrl;
@@ -680,7 +683,9 @@
           thPrev.innerHTML = '<img src="' + th + '" alt="thumbnail preview">';
           thMsg.textContent = 'auto-captured from your video — or pick your own above';
         }
-        upMeta.textContent = (dur ? '⏱ Duration ' + fmtDur(dur) : '') + ' · ready to publish ✨';
+        upMeta.textContent = (dur ? '⏱ Duration ' + fmtDur(dur) : '')
+          + (segCount > 1 ? ' · 📦 will upload in ' + segCount + ' segments' : '')
+          + ' · ready to publish ✨';
         publish.disabled = false;
       });
     }
@@ -700,33 +705,83 @@
       thMsg.textContent = '✅ custom thumbnail set';
     });
 
+    /* XHR wrapper with real upload progress */
+    function xhrSend(method, url, body, headers, onProgress) {
+      return new Promise((resolve, reject) => {
+        const x = new XMLHttpRequest();
+        x.open(method, API_BASE + url);
+        for (const k in headers) x.setRequestHeader(k, headers[k]);
+        x.upload.onprogress = e => { if (e.lengthComputable && onProgress) onProgress(e.loaded); };
+        x.onload = () => {
+          if (x.status >= 200 && x.status < 300) {
+            try { resolve(JSON.parse(x.responseText)); } catch (e2) { resolve(null); }
+          } else {
+            let m = ''; try { m = JSON.parse(x.responseText).error || ''; } catch (e2) {}
+            reject(new Error(m || ('HTTP ' + x.status)));
+          }
+        };
+        x.onerror = () => reject(new Error('network error'));
+        x.send(body);
+      });
+    }
+
     $('#upForm').addEventListener('submit', async e => {
       e.preventDefault();
       if (!file) { err('⚠️ Pick a video first.'); return; }
       const title = upTitle.value.trim() || 'Untitled vibe';
       publish.disabled = true; publish.textContent = '⏳ Uploading…';
-      try {
-        const fd = new FormData();
-        fd.append('video', file, file.name || 'video.mp4');
-        if (thumbFile) fd.append('thumb', thumbFile, 'thumb.jpg');
-        else if (thumbData) {
-          try { fd.append('thumb', await (await fetch(thumbData)).blob(), 'thumb.jpg'); } catch (e) {}
-        }
-        fd.append('title', title);
-        fd.append('description', $('#upDesc').value.trim());
-        fd.append('category', $('#upCat').value);
-        fd.append('type', $('input[name="upType"]:checked').value);
-        fd.append('duration', dur ? fmtDur(dur) : '');
-        fd.append('uploader', S.myChannel.name);
+      err('');
+      const progWrap = $('#upProg'), progLbl = $('#upProgLbl'), progFill = $('#upProgFill');
+      progWrap.classList.remove('hide');
+      const setProg = (txt, frac) => {
+        progLbl.textContent = txt;
+        progFill.style.width = Math.min(100, Math.max(0, Math.round(frac * 100))) + '%';
+      };
 
-        const res = await api('/api/videos', { method: 'POST', body: fd });
+      try {
+        const uid = (crypto.randomUUID ? crypto.randomUUID() : 'u' + Date.now() + Math.random().toString(36).slice(2));
+        const CHUNK = YV.PART_MB * 1024 * 1024;
+        const segCount = Math.max(1, Math.min(YV.MAX_PARTS, Math.ceil(file.size / CHUNK)));
+        const total = file.size;
+        let sent = 0;
+
+        for (let i = 0; i < segCount; i++) {
+          const blob = file.slice(i * CHUNK, Math.min((i + 1) * CHUNK, total));
+          const fd = new FormData();
+          fd.append('video', blob, (file.name || 'video') + '.part' + i);
+          fd.append('index', String(i));
+          await xhrSend('POST', '/api/videos/' + uid + '/segment', fd, {}, loaded => {
+            setProg('📡 Uploading segment ' + (i + 1) + '/' + segCount + ' — ' + Math.floor(((sent + loaded) / total) * 100) + '%',
+              (sent + loaded) / total);
+          });
+          sent += blob.size;
+          setProg('📡 Segment ' + (i + 1) + '/' + segCount + ' done — ' + Math.floor((sent / total) * 100) + '%', sent / total);
+        }
+
+        setProg('⚡ Finalizing…', 1);
+        const res = await api('/api/videos/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: uid,
+            title,
+            description: $('#upDesc').value.trim(),
+            category: $('#upCat').value,
+            type: $('input[name="upType"]:checked').value,
+            duration: dur ? fmtDur(dur) : '',
+            uploader: S.myChannel.name,
+            parts: segCount,
+            thumb: thumbData || null,
+          }),
+        });
         if (res.del_key) S.myDelKeys[res.id] = res.del_key;
         YV.store.save();
         await loadVideos();
         toast('Published! Everyone can see it now', '🎉');
         location.hash = '#/watch/' + res.id;
       } catch (ex) {
-        err('⚠️ ' + (ex.message || 'Upload failed') + ' — try again (file too big? server waking up?)');
+        err('⚠️ ' + (ex.message || 'Upload failed') + ' — try again (server waking up?)');
+        setProg('Upload failed', 0);
         publish.disabled = false; publish.textContent = '🚀 Publish';
       }
     });
