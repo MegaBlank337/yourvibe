@@ -11,9 +11,9 @@ window.YV = window.YV || {};
   /* uploads: ~50MB per segment is recommended; bigger videos are split
      automatically client-side and re-assembled when streaming */
   YV.PART_MB = 45;
-  YV.MAX_PARTS = 23;   /* 23 × 45MB ≈ 1GB */
-  YV.MAX_MB = 1024;
-  YV.MAX_LABEL = '1 GB';
+  YV.MAX_PARTS = 46;   /* 46 × 45MB ≈ 2GB */
+  YV.MAX_MB = 2048;
+  YV.MAX_LABEL = '2 GB';
 
   /* your local creator identity (only your browser needs it) */
   YV.MY_DEFAULT = {
