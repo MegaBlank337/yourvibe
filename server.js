@@ -9,11 +9,13 @@
    POST   /api/videos/:id/view
    GET    /api/videos/:id/comments
    POST   /api/videos/:id/comments { author, text }
+   GET    /api/creators          → { name: subscriberCount }
+   POST   /api/admin/video/:id/{views|likes|subs|comments}  { n }   (X-Admin-Key required)
    GET    /api/health
 
    Files live in Supabase Storage (public bucket "media"),
-   metadata in Supabase Postgres. Env vars needed:
-     SUPABASE_URL, SUPABASE_SERVICE_KEY, DATABASE_URL
+   metadata in Supabase Postgres. Env vars:
+     SUPABASE_URL, SUPABASE_SERVICE_KEY, DATABASE_URL, ADMIN_KEY?
    ═══════════════════════════════════════════════════════ */
 const express = require('express');
 const multer = require('multer');
@@ -22,13 +24,14 @@ const crypto = require('crypto');
 const path = require('path');
 const dns = require('dns');
 
-/* Supabase db.* hosts resolve to IPv6 first, but Render free
+/* Supabase db.* hosts resolve to IPv6 first (or only), but Render free
    instances have no IPv6 egress — force IPv4. */
 try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_MB = 50;
+const ADMIN_KEY = process.env.ADMIN_KEY || 'neon-admin';
 
 const SB_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SB_KEY = process.env.SUPABASE_SERVICE_KEY || '';
@@ -38,7 +41,7 @@ const DB_URL = process.env.DATABASE_URL || '';
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Key');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -113,6 +116,10 @@ async function migrate() {
     created_at timestamptz default now()
   )`);
   await q(`create index if not exists comments_video_idx on comments(video_id)`);
+  await q(`create table if not exists creators (
+    name text primary key,
+    subs bigint default 0
+  )`);
   await q(`insert into storage.buckets (id, name, public)
            values ('media', 'media', true) on conflict (id) do nothing`);
   migrated = true;
@@ -150,6 +157,9 @@ async function sbDelete(objPath) {
 }
 const pubUrl = p => SB_URL + '/storage/v1/object/public/media/' + p;
 
+/* numbers from pg come back as strings — normalize rows */
+const num = v => Number(v) || 0;
+
 /* ── API ── */
 app.get('/api/health', async (req, res) => {
   try { await q('select 1'); res.json({ ok: true, migrated }); }
@@ -160,7 +170,16 @@ app.get('/api/videos', async (req, res) => {
   try {
     const r = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,created_at
                        from videos order by created_at desc limit 200`);
-    res.json(r.rows);
+    res.json(r.rows.map(row => Object.assign({}, row, { views: num(row.views), likes: num(row.likes) })));
+  } catch (e) { res.status(500).json({ error: 'db down' }); }
+});
+
+app.get('/api/creators', async (req, res) => {
+  try {
+    const r = await q('select name, subs from creators');
+    const out = {};
+    r.rows.forEach(row => out[row.name] = num(row.subs));
+    res.json(out);
   } catch (e) { res.status(500).json({ error: 'db down' }); }
 });
 
@@ -214,7 +233,7 @@ app.post('/api/videos/:id/like', async (req, res) => {
     const delta = (req.body && req.body.delta) === -1 ? -1 : 1;
     const r = await q('update videos set likes = greatest(0, likes + $1) where id = $2 returning likes', [delta, req.params.id]);
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
-    res.json({ likes: Number(r.rows[0].likes) });
+    res.json({ likes: num(r.rows[0].likes) });
   } catch (e) { res.status(500).json({ error: 'db down' }); }
 });
 
@@ -227,7 +246,7 @@ app.post('/api/videos/:id/view', async (req, res) => {
 
 app.get('/api/videos/:id/comments', async (req, res) => {
   try {
-    const r = await q('select id, author, text, created_at from comments where video_id = $1 order by created_at desc limit 200', [req.params.id]);
+    const r = await q('select id, author, text, created_at from comments where video_id = $1 order by created_at desc limit 500', [req.params.id]);
     res.json(r.rows);
   } catch (e) { res.status(500).json({ error: 'db down' }); }
 });
@@ -255,6 +274,71 @@ app.delete('/api/videos/:id', async (req, res) => {
     if (row.thumb_path) await sbDelete(row.thumb_path);
     res.sendStatus(204);
   } catch (e) { res.status(500).json({ error: 'db down' }); }
+});
+
+/* ── ADMIN (panel opens with F4 in the app) ── */
+const RAND_ADJ = ['Neon', 'Cyber', 'Pixel', 'Glitch', 'Retro', 'Synth', 'Astro', 'Laser', 'Turbo', 'Hyper', 'Ultra', 'Quantum', 'Vapor', 'Chrome', 'Plasma'];
+const RAND_NOUN = ['Fox', 'Wolf', 'Tiger', 'Panda', 'Falcon', 'Viper', 'Phoenix', 'Ninja', 'Ghost', 'Wizard', 'Rider', 'Byte', 'Drifter', 'Nomad', 'Samurai'];
+const RAND_TEXTS = [
+  'this goes hard 🔥', 'the algorithm blessed me today ⚡', 'watching this at 3am hits different 🌃',
+  'the vibes are immaculate ✨', 'who else here from the future? 🚀', 'instant classic 💯',
+  'looped it 10 times already 🔁', 'the neon aesthetic though 😍', 'my brain: dopamine approved ✅',
+  'certified banger 🎧', 'no way this is real 😳', 'the edit is clean, respect 👏',
+  'subscribed instantly 🔔', 'this deserves 1M views', 'absolute masterpiece 🎨',
+  'POV: you found the best video today', 'the transitions 💀🔥', 'saving this to my library right now',
+  'the glow is unreal 💜', 'came for 5 seconds, stayed 20 minutes', 'send this to your best friend 📤',
+  'playing this on repeat till 2077', 'cinema. pure cinema. 🍿', 'bro really uploaded a classic',
+  'first 🥇', 'I was here before it was cool 😎', 'the server is working overtime for this one',
+  'my playlist needed this', 'grandma asked why the screen is pink and glowing',
+];
+const randPick = arr => arr[crypto.randomInt(arr.length)];
+function randAccount() {
+  return randPick(RAND_ADJ) + randPick(RAND_NOUN) + (crypto.randomInt(10) < 4 ? '_' + crypto.randomInt(100) : '');
+}
+
+app.post('/api/admin/video/:id/:action', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const action = req.params.action;
+    const nRaw = Number(req.body && req.body.n);
+    if (!Number.isFinite(nRaw)) return res.status(400).json({ error: 'bad n' });
+
+    if (action === 'views' || action === 'likes') {
+      const n = Math.max(0, Math.min(1000000, Math.round(nRaw)));
+      const col = action === 'views' ? 'views' : 'likes';
+      const r = await q(`update videos set ${col} = ${col} + $1 where id = $2 returning ${col}`, [n, req.params.id]);
+      if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+      return res.json({ ok: true, [action]: num(r.rows[0][col]) });
+    }
+
+    if (action === 'subs') {
+      const n = Math.max(0, Math.min(10000000, Math.round(nRaw)));
+      const r = await q('select uploader from videos where id = $1', [req.params.id]);
+      if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+      const name = r.rows[0].uploader;
+      await q(`insert into creators (name, subs) values ($1, $2)
+               on conflict (name) do update set subs = creators.subs + $2`, [name, n]);
+      const c = await q('select subs from creators where name = $1', [name]);
+      return res.json({ ok: true, creator: name, subs: num(c.rows[0].subs) });
+    }
+
+    if (action === 'comments') {
+      const count = Math.max(1, Math.min(500, Math.round(nRaw)));
+      const chunks = [], params = [];
+      for (let i = 0; i < count; i++) {
+        const b = i * 3;
+        chunks.push(`($${b + 1}, $${b + 2}, $${b + 3})`);
+        params.push(req.params.id, randAccount(), randPick(RAND_TEXTS));
+      }
+      await q('insert into comments (video_id, author, text) values ' + chunks.join(','), params);
+      return res.json({ ok: true, inserted: count });
+    }
+
+    return res.status(400).json({ error: 'unknown action' });
+  } catch (e) {
+    console.error('admin error:', e.message);
+    res.status(500).json({ error: 'admin failed' });
+  }
 });
 
 /* ── static app ── */
