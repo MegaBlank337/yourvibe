@@ -338,6 +338,9 @@ app.post('/api/videos/complete', async (req, res) => {
              values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [id, title, description, category, type, duration, uploader, videoPath, thumbPath, pubUrl(videoPath), thumbUrl, delKey, parts, JSON.stringify(sizes)]);
 
+    /* every uploader gets a creators row so subscriber counts always exist */
+    try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [uploader]); } catch (e) {}
+
     res.status(201).json({ id, video_url: pubUrl(videoPath), thumb_url: thumbUrl, del_key: delKey, parts });
   } catch (e) {
     console.error('complete error:', e.message);
