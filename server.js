@@ -235,6 +235,28 @@ app.post('/api/auth/logout', async (req, res) => {
   res.json({ ok: true });
 });
 
+/* claim guest uploads for the logged-in account (del_key proves ownership) */
+app.post('/api/auth/claim', async (req, res) => {
+  try {
+    const username = await authUser(req);
+    if (!username) return res.status(401).json({ error: 'not logged in' });
+    const claims = (req.body && Array.isArray(req.body.claims)) ? req.body.claims.slice(0, 200) : [];
+    let moved = 0;
+    for (const c of claims) {
+      if (!c || !/^[A-Za-z0-9-]{8,64}$/.test(String(c.id || ''))) continue;
+      try {
+        const r = await q('update videos set uploader = $1 where id = $2 and del_key = $3 and uploader <> $1',
+          [username, c.id, String(c.del_key || '')]);
+        moved += r.rowCount || 0;
+      } catch (e) { /* skip */ }
+    }
+    if (moved > 0) {
+      try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [username]); } catch (e) {}
+    }
+    res.json({ ok: true, moved });
+  } catch (e) { res.status(500).json({ error: 'claim failed' }); }
+});
+
 app.get('/api/health', async (req, res) => {
   try { await q('select 1'); res.json({ ok: true, migrated }); }
   catch (e) { res.status(500).json({ ok: false, error: e.message }); }
@@ -520,6 +542,17 @@ app.post('/api/admin/video/:id/:action', async (req, res) => {
   try {
     if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
     const action = req.params.action;
+
+    /* transfer a video to another creator/account */
+    if (action === 'transfer') {
+      const to = String((req.body && req.body.to) || '').trim().slice(0, 50);
+      if (!to) return res.status(400).json({ error: 'missing target name' });
+      const r = await q('update videos set uploader = $1 where id = $2 returning uploader', [to, req.params.id]);
+      if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+      try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [to]); } catch (e) {}
+      return res.json({ ok: true, uploader: to });
+    }
+
     const nRaw = Number(req.body && req.body.n);
     if (!Number.isFinite(nRaw)) return res.status(400).json({ error: 'bad n' });
 
