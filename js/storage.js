@@ -19,6 +19,7 @@ YV.store = (function () {
     over: {},       // { videoId: extraViews } view counter overlay
     myChannel: null,// configured in Settings
     myDelKeys: {},  // { videoId: secret delete key } for uploads from this browser
+    auth: null,     // { token, username } when logged in
     myVideos: [],   // (legacy, unused)
   };
 
