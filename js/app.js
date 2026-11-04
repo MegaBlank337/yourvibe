@@ -955,9 +955,11 @@
     if (S.auth && S.auth.username) {
       el.innerHTML = avatarHTML({ name: S.auth.username, colors: palFor(S.auth.username) }, 36);
       el.title = '@' + S.auth.username;
+      el.setAttribute('href', '#/channel');
     } else {
       el.innerHTML = '<span class="signin-btn">Sign in</span>';
       el.title = 'Sign in / Sign up';
+      el.setAttribute('href', '#/login');
     }
   }
 
