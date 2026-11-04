@@ -74,7 +74,7 @@ async function dbConfig() {
 }
 
 async function q(sql, params) {
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       if (!pg || pg._ended) {
         pg = new Client(await dbConfig());
@@ -85,7 +85,8 @@ async function q(sql, params) {
     } catch (e) {
       try { if (pg) pg.end(); } catch (e2) {}
       pg = null;
-      if (attempt === 2) throw e;
+      if (attempt === 3) throw e;
+      await new Promise(r => setTimeout(r, 350));
     }
   }
 }
