@@ -8,8 +8,11 @@ window.YV = window.YV || {};
 (function () {
   YV.CATS = ['Music', 'Gaming', 'Tech', 'Art', 'Cars', 'Fitness', 'Vlogs', 'Fun', 'Other'];
 
-  /* max upload size the API accepts (MB) — matches Supabase free tier */
-  YV.MAX_MB = 50;
+  /* uploads: ~50MB per segment is recommended; bigger videos are split
+     automatically client-side and re-assembled when streaming */
+  YV.PART_MB = 45;
+  YV.MAX_PARTS = 10;
+  YV.MAX_MB = 450;
 
   /* your local creator identity (only your browser needs it) */
   YV.MY_DEFAULT = {
