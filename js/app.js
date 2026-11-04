@@ -706,6 +706,9 @@
         const fd = new FormData();
         fd.append('video', file, file.name || 'video.mp4');
         if (thumbFile) fd.append('thumb', thumbFile, 'thumb.jpg');
+        else if (thumbData) {
+          try { fd.append('thumb', await (await fetch(thumbData)).blob(), 'thumb.jpg'); } catch (e) {}
+        }
         fd.append('title', title);
         fd.append('description', $('#upDesc').value.trim());
         fd.append('category', $('#upCat').value);
