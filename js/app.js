@@ -15,6 +15,12 @@
   const toasts = $('#toasts');
   let cleanups = [];
   let shortsMuted = true;
+  let UPLOADING = false; // true while a video upload is in flight
+
+  /* don't let a reload kill an active upload */
+  window.addEventListener('beforeunload', e => {
+    if (UPLOADING) { e.preventDefault(); e.returnValue = ''; }
+  });
 
   function runCleanups() { cleanups.forEach(f => { try { f(); } catch (e) {} }); cleanups = []; }
 
@@ -747,6 +753,7 @@
         progFill.style.width = Math.min(100, Math.max(0, Math.round(frac * 100))) + '%';
       };
 
+      UPLOADING = true;
       try {
         const uid = (crypto.randomUUID ? crypto.randomUUID() : 'u' + Date.now() + Math.random().toString(36).slice(2));
         const CHUNK = YV.PART_MB * 1024 * 1024;
@@ -754,15 +761,29 @@
         const total = file.size;
         let sent = 0;
 
-        for (let i = 0; i < segCount; i++) {
-          const blob = file.slice(i * CHUNK, Math.min((i + 1) * CHUNK, total));
+        /* one segment with auto-retry (segments are idempotent) */
+        const sendSeg = async (i, blob, attempt) => {
           const fd = new FormData();
           fd.append('video', blob, (file.name || 'video') + '.part' + i);
           fd.append('index', String(i));
-          await xhrSend('POST', '/api/videos/' + uid + '/segment', fd, {}, loaded => {
-            setProg('📡 Uploading segment ' + (i + 1) + '/' + segCount + ' — ' + Math.floor(((sent + loaded) / total) * 100) + '%',
-              (sent + loaded) / total);
-          });
+          try {
+            await xhrSend('POST', '/api/videos/' + uid + '/segment', fd, {}, loaded => {
+              setProg('📡 Uploading segment ' + (i + 1) + '/' + segCount + ' — ' + Math.floor(((sent + loaded) / total) * 100) + '%',
+                (sent + loaded) / total);
+            });
+          } catch (e) {
+            if (attempt < 3) {
+              setProg('⚠️ Segment ' + (i + 1) + ' hiccup — retrying (' + attempt + '/2)…', sent / total);
+              await new Promise(r => setTimeout(r, 2500));
+              return sendSeg(i, blob, attempt + 1);
+            }
+            throw e;
+          }
+        };
+
+        for (let i = 0; i < segCount; i++) {
+          const blob = file.slice(i * CHUNK, Math.min((i + 1) * CHUNK, total));
+          await sendSeg(i, blob, 1);
           sent += blob.size;
           setProg('📡 Segment ' + (i + 1) + '/' + segCount + ' done — ' + Math.floor((sent / total) * 100) + '%', sent / total);
         }
@@ -792,6 +813,8 @@
         err('⚠️ ' + (ex.message || 'Upload failed') + ' — try again (server waking up?)');
         setProg('Upload failed', 0);
         publish.disabled = false; publish.textContent = '🚀 Publish';
+      } finally {
+        UPLOADING = false;
       }
     });
   }
@@ -1357,8 +1380,10 @@
   /* if logged in, quietly pull any guest uploads into the account */
   claimMyVideos(true).then(moved => { if (moved > 0) navigate(); });
 
-  /* auto-update: reload the tab when a newer version is deployed */
+  /* auto-update: reload the tab when a newer version is deployed
+     — but NEVER while an upload is running */
   async function checkVersion() {
+    if (UPLOADING) return;
     try {
       const r = await fetch('/', { cache: 'no-store' });
       const t = await r.text();
