@@ -12,4 +12,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping health endpoint
-        run: curl -s -m 120 -o /dev/null -w "health: %{http_code}\n" https://yourvibe-api.onrender.com/api/health
+        run: curl -sf -m 120 https://yourvibe-api.onrender.com/api/health
