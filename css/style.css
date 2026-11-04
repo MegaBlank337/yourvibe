@@ -786,6 +786,31 @@ main > * { animation: fadeUp .38s ease both; }
 .prev-head h3 { font-family: 'Orbitron', sans-serif; letter-spacing: 1px; }
 .file-row { display: flex; align-items: center; gap: 13px; flex-wrap: wrap; }
 
+/* ══════════ ANNOUNCEMENT BAR ══════════ */
+.announce {
+  position: fixed; top: 64px; left: 0; right: 0; z-index: 45;
+  display: flex; justify-content: center;
+  padding: 10px 14px 0;
+  pointer-events: none;
+}
+.announce-inner {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: 12px;
+  max-width: 880px;
+  background: rgba(10, 12, 28, .94);
+  border: 1px solid rgba(255, 43, 214, .55);
+  border-radius: 12px;
+  padding: 10px 16px;
+  box-shadow: 0 0 24px rgba(255, 43, 214, .28);
+  backdrop-filter: blur(8px);
+  animation: fadeUp .35s ease both;
+}
+.ann-ico { font-size: 19px; filter: drop-shadow(0 0 8px var(--pink)); }
+.ann-text { font-weight: 600; font-size: 15.5px; line-height: 1.35; }
+.ann-x { color: var(--mut); font-size: 14px; flex-shrink: 0; }
+.ann-x:hover { color: #fff; text-shadow: 0 0 8px var(--pink); }
+body.has-ann main { padding-top: 138px; }
+
 /* ══════════ AUTH ══════════ */
 .signin-btn {
   font-family: 'Orbitron', sans-serif; font-size: 11.5px; font-weight: 700; letter-spacing: 1px;
