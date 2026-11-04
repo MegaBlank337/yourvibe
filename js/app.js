@@ -1356,4 +1356,16 @@
   loadAnnouncement();
   /* if logged in, quietly pull any guest uploads into the account */
   claimMyVideos(true).then(moved => { if (moved > 0) navigate(); });
+
+  /* auto-update: reload the tab when a newer version is deployed */
+  async function checkVersion() {
+    try {
+      const r = await fetch('/', { cache: 'no-store' });
+      const t = await r.text();
+      const m = /YV_V\s*=\s*(\d+)/.exec(t);
+      if (m && window.YV_V && Number(m[1]) > Number(window.YV_V)) location.reload();
+    } catch (e) { /* offline etc. */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkVersion(); });
+  setInterval(checkVersion, 60000);
 })();
