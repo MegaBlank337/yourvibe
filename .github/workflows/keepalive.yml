@@ -1,0 +1,15 @@
+name: Keep API awake
+
+# Pings the Render free-tier API every 10 minutes so it never
+# falls asleep (no more cold-start waits for visitors).
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        run: curl -s -m 120 -o /dev/null -w "health: %{http_code}\n" https://yourvibe-api.onrender.com/api/health
