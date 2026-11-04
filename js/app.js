@@ -52,6 +52,32 @@
     VIDEOS = vids;
     CREATORS = creators || {};
     videosLoaded = true;
+    saveFeedCache();
+  }
+
+  /* ── instant-load feed cache (stale-while-revalidate) ── */
+  const FEED_CACHE = 'yv_feed_v1';
+
+  function saveFeedCache() {
+    try { localStorage.setItem(FEED_CACHE, JSON.stringify({ v: VIDEOS, c: CREATORS, t: Date.now() })); } catch (e) {}
+  }
+
+  function hydrateFeedCache() {
+    try {
+      const raw = localStorage.getItem(FEED_CACHE);
+      if (!raw) return false;
+      const j = JSON.parse(raw);
+      if (!Array.isArray(j.v)) return false;
+      VIDEOS = j.v;
+      CREATORS = j.c || {};
+      videosLoaded = true;
+      return true;
+    } catch (e) { return false; }
+  }
+
+  function feedSig() {
+    return VIDEOS.length + '|' + VIDEOS.map(x => x.id + ':' + (x.views || 0) + ':' + (x.likes || 0)).join(',').length
+      + '|' + Object.keys(CREATORS).map(k => k + CREATORS[k]).join('').length;
   }
 
   function byId(id) { return VIDEOS.find(v => v.id === id); }
@@ -1375,8 +1401,20 @@
   if (!S.myDelKeys) S.myDelKeys = {};
   renderMe();
   window.addEventListener('hashchange', navigate);
+
+  /* render instantly from cache, then refresh silently in the background */
+  const hydrated = hydrateFeedCache();
   navigate();
   loadAnnouncement();
+  if (hydrated) {
+    const sig = feedSig();
+    loadVideos().then(() => {
+      if (feedSig() !== sig) {
+        const p = location.hash.slice(1) || '/';
+        if (/^\/?$|\/home|\/subscriptions|\/library|\/shorts/.test(p)) navigate();
+      }
+    }).catch(() => {});
+  }
   /* if logged in, quietly pull any guest uploads into the account */
   claimMyVideos(true).then(moved => { if (moved > 0) navigate(); });
 
