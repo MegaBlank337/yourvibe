@@ -759,6 +759,21 @@ main > * { animation: fadeUp .38s ease both; }
   border-radius: 10px; border: 1px solid rgba(0, 229, 255, .4);
   box-shadow: 0 0 18px rgba(255, 43, 214, .2);
 }
+
+/* upload progress bar */
+.progress-wrap { display: flex; flex-direction: column; gap: 9px; }
+.progress-label { font-size: 14.5px; font-weight: 700; color: var(--cyan); text-shadow: 0 0 10px rgba(0, 229, 255, .4); }
+.progress-bar {
+  height: 14px; border-radius: 99px; overflow: hidden;
+  background: rgba(255, 255, 255, .07);
+  border: 1px solid var(--line);
+}
+.progress-fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--pink), var(--purple), var(--cyan));
+  box-shadow: 0 0 14px rgba(255, 43, 214, .55);
+  transition: width .25s ease;
+}
 .publish { margin-top: 6px; justify-content: center; }
 
 .set-col { display: flex; flex-direction: column; gap: 22px; }
