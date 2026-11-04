@@ -350,7 +350,7 @@ app.post('/api/videos/:id/segment', uploadSeg.single('video'), async (req, res) 
     if (!f) return res.status(400).json({ error: 'no segment file' });
     const id = req.params.id;
     if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'bad id' });
-    const idx = Math.max(0, Math.min(45, parseInt((req.body && req.body.index) || '0', 10) || 0));
+    const idx = Math.max(0, Math.min(63, parseInt((req.body && req.body.index) || '0', 10) || 0));
 
     if (ghMode()) {
       const asset = await ghPutAsset('v-' + id, 'part' + idx + '.mp4', f.buffer, f.mimetype || 'video/mp4');
@@ -389,7 +389,7 @@ app.post('/api/videos/complete', async (req, res) => {
     const b = req.body || {};
     const id = String(b.id || '');
     if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'bad id' });
-    const parts = Math.max(1, Math.min(46, parseInt(b.parts, 10) || 1));
+    const parts = Math.max(1, Math.min(64, parseInt(b.parts, 10) || 1));
     const store = ghMode() ? 'gh' : 'sb';
 
     const partUrl0 = store === 'gh' ? ghPartUrl(id, 0) : pubUrl(partPath(id, 0));
