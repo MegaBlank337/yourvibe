@@ -786,6 +786,32 @@ main > * { animation: fadeUp .38s ease both; }
 .prev-head h3 { font-family: 'Orbitron', sans-serif; letter-spacing: 1px; }
 .file-row { display: flex; align-items: center; gap: 13px; flex-wrap: wrap; }
 
+/* ══════════ AUTH ══════════ */
+.signin-btn {
+  font-family: 'Orbitron', sans-serif; font-size: 11.5px; font-weight: 700; letter-spacing: 1px;
+  padding: 9px 18px; border-radius: 999px;
+  color: #05060e;
+  background: linear-gradient(90deg, var(--cyan), var(--lime));
+  box-shadow: 0 0 14px rgba(0, 229, 255, .4);
+  transition: all .2s; white-space: nowrap;
+}
+.signin-btn:hover { box-shadow: 0 0 22px rgba(0, 229, 255, .7); }
+
+.auth-card {
+  max-width: 430px; margin: 20px auto 0;
+  background: rgba(14, 18, 38, .75);
+  border: 1px solid rgba(139, 92, 246, .4);
+  border-radius: 18px;
+  padding: 28px;
+  box-shadow: 0 0 30px rgba(139, 92, 246, .15);
+  display: flex; flex-direction: column; gap: 16px;
+  animation: fadeUp .4s ease both;
+}
+.auth-card .ch-tabs { margin: 0; }
+.auth-card .up-form { gap: 14px; }
+.lnk { color: var(--cyan); font-weight: 700; text-shadow: 0 0 8px rgba(0, 229, 255, .4); }
+.lnk:hover { text-decoration: underline; }
+
 /* ══════════ ADMIN PANEL (F4) ══════════ */
 .admin-overlay {
   position: fixed; inset: 0; z-index: 200;
