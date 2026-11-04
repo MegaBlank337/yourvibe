@@ -22,7 +22,9 @@
   const API_BASE = (function(){ try { return localStorage.getItem('yv_api_base') || 'https://yourvibe-api.onrender.com'; } catch(e){ return 'https://yourvibe-api.onrender.com'; } })();
 
   async function api(path, opts) {
-    const r = await fetch(API_BASE + path, opts);
+    const headers = Object.assign({}, (opts && opts.headers) || {});
+    if (S.auth && S.auth.token) headers['X-Auth'] = S.auth.token;
+    const r = await fetch(API_BASE + path, Object.assign({}, opts, { headers }));
     if (!r.ok) {
       let m = '';
       try { m = (await r.json()).error || ''; } catch (e) {}
@@ -110,7 +112,8 @@
   }
 
   /* ═══════════ content model ═══════════ */
-  const meCh = () => ({ id: 'me', isMe: true, name: S.myChannel.name, colors: S.myChannel.colors });
+  const myName = () => (S.auth && S.auth.username) || S.myChannel.name;
+  const meCh = () => ({ id: 'me', isMe: true, name: myName(), colors: S.myChannel.colors });
 
   const AV_PALETTES = [['#ff2bd6', '#7b2ff7'], ['#00e5ff', '#2d6bff'], ['#39ff14', '#00e5ff'], ['#ff9d00', '#ff2bd6'], ['#8a2be2', '#00e5ff'], ['#00ffa3', '#39ff14']];
   function hashHue(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
@@ -326,7 +329,7 @@
     const hist = S.history.map(byId).filter(Boolean).slice(0, 12);
     const liked = Object.keys(S.likes).map(byId).filter(Boolean);
     const later = Object.keys(S.later).map(byId).filter(Boolean);
-    const mine = VIDEOS.filter(v => v.uploader === S.myChannel.name);
+    const mine = VIDEOS.filter(v => v.uploader === myName());
     const any = hist.length || liked.length || later.length || mine.length;
 
     main.innerHTML = '<h1 class="page-title">Library</h1>' + (!any
@@ -341,7 +344,7 @@
   async function viewMyChannel() {
     if (!await ensureVideos()) return;
     const c = S.myChannel;
-    const mine = VIDEOS.filter(v => v.uploader === c.name);
+    const mine = VIDEOS.filter(v => v.uploader === myName());
     const totalViews = mine.reduce((a, v) => a + (v.views || 0), 0);
     const totalLikes = mine.reduce((a, v) => a + likesOf(v), 0);
 
@@ -471,7 +474,7 @@
       + likeGroupHTML(v)
       + '<button class="act-btn" data-action="share" data-id="' + v.id + '">🔗 Share</button>'
       + '<button class="act-btn' + (S.later[v.id] ? ' on' : '') + '" data-action="later" data-id="' + v.id + '">⏳ Later</button>'
-      + (S.myDelKeys[v.id] ? '<button class="act-btn danger" data-action="del" data-id="' + v.id + '">🗑 Delete</button>' : '')
+      + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="act-btn danger" data-action="del" data-id="' + v.id + '">🗑 Delete</button>' : '')
       + '</div>'
       + '<div class="w-desc"><b>' + fmtNum(viewsOf(v)) + ' views · ' + agoOf(v) + (v.category ? ' · #' + esc(v.category) : '') + '</b><br>' + esc(v.description || '') + '</div>'
       + '<div id="comments-slot">' + loadingHTML() + '</div>'
@@ -624,7 +627,9 @@
       + '<div class="dz-s">or <span class="dz-browse">browse files</span></div>'
       + '<div class="dz-name" id="dzName"></div></div>'
       + '<form class="up-form" id="upForm" novalidate>'
-      + '<p class="muted-txt">Uploading as <b>' + esc(S.myChannel.name) + '</b> — change it in ⚙ Customize channel.</p>'
+      + (S.auth && S.auth.username
+        ? '<p class="muted-txt">Publishing as <b>@' + esc(S.auth.username) + '</b> 🔒</p>'
+        : '<p class="muted-txt">Uploading as guest <b>' + esc(S.myChannel.name) + '</b> — <a class="lnk" href="#/login">sign in</a> to post under an account.</p>')
       + '<div class="field"><label>Title</label><input id="upTitle" maxlength="90" placeholder="Give it a neon title…" required></div>'
       + '<div class="field"><label>Description</label><textarea id="upDesc" rows="4" placeholder="Tell the vibe…"></textarea></div>'
       + '<div class="field-row">'
@@ -769,7 +774,7 @@
             category: $('#upCat').value,
             type: $('input[name="upType"]:checked').value,
             duration: dur ? fmtDur(dur) : '',
-            uploader: S.myChannel.name,
+            uploader: myName(),
             parts: segCount,
             thumb: thumbData || null,
           }),
@@ -794,6 +799,12 @@
       + '<h1 class="page-title">Customize your channel</h1>'
       + '<div class="set-grid">'
       + '<div class="set-col">'
+      + '<div class="about-card"><h3>👤 Account</h3>'
+      + (S.auth && S.auth.username
+        ? '<p class="muted-txt">Signed in as <b>@' + esc(S.auth.username) + '</b> — your uploads are bound to this account.</p>'
+        + '<button class="pill-btn danger" data-action="logout">Log out</button>'
+        : '<p class="muted-txt">You\'re a guest. <a class="lnk" href="#/login">Sign in or create an account</a> to lock your name.</p>')
+      + '</div>'
       + '<div class="preview-card">'
       + '<div class="banner prev' + (c.banner ? ' has-img' : '') + '"' + (c.banner ? ' style="background-image:url(' + c.banner + ')"' : ' style="--c1:' + c.colors[0] + ';--c2:' + c.colors[1] + '"') + ' id="prevBanner"></div>'
       + '<div class="prev-head">' + '<span id="prevAva">' + avatarHTML(meCh(), 72) + '</span>'
@@ -803,7 +814,9 @@
       + '<button class="pill-btn danger" data-action="reset-all">Reset ALL local data</button></div>'
       + '</div>'
       + '<form class="up-form" id="setForm">'
-      + '<div class="field"><label>Channel name</label><input id="stName" maxlength="40" value="' + esc(c.name) + '" required></div>'
+      + '<div class="field"><label>Channel name</label>' + (S.auth && S.auth.username
+        ? '<input value="@' + esc(S.auth.username) + '" disabled><p class="muted-txt">locked to your account</p>'
+        : '<input id="stName" maxlength="40" value="' + esc(c.name) + '" required>') + '</div>'
       + '<div class="field"><label>Bio</label><textarea id="stBio" rows="4" placeholder="Tell the world about your vibe…">' + esc(c.bio || '') + '</textarea></div>'
       + '<div class="field"><label>Profile picture</label><div class="file-row">'
       + '<button type="button" class="pill-btn ghost" id="avaBtn">🖼 Choose avatar</button>'
@@ -833,13 +846,15 @@
       $('#banMsg').textContent = banData ? '✅ ready' : '⚠️ could not read image';
       if (banData) { const b = $('#prevBanner'); b.classList.add('has-img'); b.style.backgroundImage = 'url(' + banData + ')'; }
     };
-    $('#stName').oninput = e => $('#prevName').textContent = e.target.value || '…';
+    $('#stName') && ($('#stName').oninput = e => $('#prevName').textContent = e.target.value || '…');
 
     $('#setForm').onsubmit = e => {
       e.preventDefault();
-      const name = $('#stName').value.trim();
-      if (!name) { $('#stErr').textContent = '⚠️ Channel name is required.'; return; }
-      S.myChannel.name = name;
+      if (!S.auth) {
+        const name = $('#stName').value.trim();
+        if (!name) { $('#stErr').textContent = '⚠️ Channel name is required.'; return; }
+        S.myChannel.name = name;
+      }
       S.myChannel.bio = $('#stBio').value.trim();
       S.myChannel.avatar = avaData;
       S.myChannel.banner = banData;
@@ -932,7 +947,73 @@
   }
 
   function renderMe() {
-    $('#meAvatar').innerHTML = avatarHTML(meCh(), 36);
+    const el = $('#meAvatar');
+    if (S.auth && S.auth.username) {
+      el.innerHTML = avatarHTML({ name: S.auth.username, colors: palFor(S.auth.username) }, 36);
+      el.title = '@' + S.auth.username;
+    } else {
+      el.innerHTML = '<span class="signin-btn">Sign in</span>';
+      el.title = 'Sign in / Sign up';
+    }
+  }
+
+  /* ═══════════ VIEW: LOGIN / SIGNUP ═══════════ */
+  function viewLogin() {
+    if (S.auth && S.auth.username) {
+      main.innerHTML = '<div class="page"><div class="auth-card">'
+        + '<h1 class="page-title">You\'re signed in</h1>'
+        + '<p class="muted-txt pad">Logged in as <b>@' + esc(S.auth.username) + '</b></p>'
+        + '<button class="pill-btn danger" data-action="logout">Log out</button>'
+        + '</div></div>';
+      return;
+    }
+    main.innerHTML = '<div class="page"><div class="auth-card">'
+      + '<h1 class="page-title">Join YourVibe</h1>'
+      + '<p class="muted-txt">Accounts keep your name safe — videos you publish are bound to it, and you can delete them from any device.</p>'
+      + '<div class="ch-tabs" style="margin-left:0;margin-right:0">'
+      + '<button class="tab-btn on" id="tabLogin" data-action="authtab" data-tab="login">Log in</button>'
+      + '<button class="tab-btn" id="tabSignup" data-action="authtab" data-tab="signup">Sign up</button>'
+      + '</div>'
+      + '<form class="up-form" id="authForm">'
+      + '<div class="field"><label>Username</label><input id="auUser" maxlength="20" placeholder="neon_fox" autocomplete="username"></div>'
+      + '<div class="field"><label>Password</label><input id="auPass" type="password" maxlength="72" placeholder="••••••" autocomplete="current-password"></div>'
+      + '<div class="form-err" id="auErr"></div>'
+      + '<button class="btn-neon" id="auSubmit" type="submit">Log in</button>'
+      + '</form></div></div>';
+
+    let mode = 'login';
+    const setMode = m => {
+      mode = m;
+      $('#tabLogin').classList.toggle('on', mode === 'login');
+      $('#tabSignup').classList.toggle('on', mode === 'signup');
+      $('#auSubmit').textContent = mode === 'login' ? 'Log in' : 'Create account ✨';
+      $('#auErr').textContent = '';
+    };
+    $('#tabLogin').onclick = () => setMode('login');
+    $('#tabSignup').onclick = () => setMode('signup');
+
+    $('#authForm').onsubmit = async e => {
+      e.preventDefault();
+      const username = $('#auUser').value.trim().toLowerCase();
+      const password = $('#auPass').value;
+      $('#auErr').textContent = '';
+      $('#auSubmit').disabled = true;
+      try {
+        const r = await api('/api/auth/' + (mode === 'login' ? 'login' : 'signup'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        S.auth = { token: r.token, username: r.username };
+        YV.store.save();
+        renderMe();
+        toast(mode === 'login' ? 'Welcome back, @' + r.username + '!' : 'Account created — welcome, @' + r.username + '!', '✨');
+        location.hash = '#/upload';
+      } catch (ex) {
+        $('#auErr').textContent = '⚠️ ' + (ex.message || 'failed');
+        $('#auSubmit').disabled = false;
+      }
+    };
   }
 
   /* ═══════════ ADMIN PANEL (press F4) ═══════════ */
@@ -1046,6 +1127,14 @@
     const a = t.dataset.action, id = t.dataset.id;
 
     if (a === 'retry') { videosLoaded = false; navigate(); }
+    else if (a === 'logout') {
+      api('/api/auth/logout', { method: 'POST' }).catch(() => {});
+      S.auth = null;
+      YV.store.save();
+      renderMe();
+      toast('Logged out', '👋');
+      location.hash = '#/home';
+    }
     else if (a === 'like') toggleLike(id);
     else if (a === 'dislike') toggleDislike(id);
     else if (a === 'sub') toggleSub(t.dataset.ch);
@@ -1092,7 +1181,7 @@
         const c = await api('/api/videos/' + vid + '/comments', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ author: S.myChannel.name, text })
+          body: JSON.stringify({ author: myName(), text })
         });
         const list = $('#cList');
         if (list) {
@@ -1118,6 +1207,7 @@
     [/^\/library$/,           () => viewLibrary()],
     [/^\/upload$/,            () => viewUpload()],
     [/^\/settings$/,          () => viewSettings()],
+    [/^\/login$/,             () => viewLogin()],
     [/^\/channel$/,           () => viewMyChannel()],
     [/^\/c\/(.+)$/,           m => viewChannel(m[1])],
     [/^\/watch\/([\w-]+)$/,   m => viewWatch(m[1])],
