@@ -271,7 +271,7 @@
     main.innerHTML = '<div class="shorts-feed">' + shorts.map(s => {
       const up = upOf(s);
       return '<section class="short" data-short="' + s.id + '">'
-        + '<video loop muted playsinline preload="metadata"' + (s.thumb_url ? ' poster="' + s.thumb_url + '"' : '') + ' src="' + s.video_url + '"></video>'
+        + '<video loop muted playsinline preload="metadata"' + (s.thumb_url ? ' poster="' + s.thumb_url + '"' : '') + ' src="' + srcOf(s) + '"></video>'
         + '<div class="short-panel">'
         + '<div class="short-info">' + avatarHTML(up, 34)
         + '<div class="si-txt"><b>' + esc(s.uploader) + '</b></div>' + subBtnHTML(s.uploader, true) + '</div>'
@@ -432,7 +432,7 @@
 
   /* ═══════════ VIEW: WATCH ═══════════ */
   function playerHTML(v) {
-    const src = v.video_url;
+    const src = srcOf(v); // multi-part videos stream through the API as one file
     if (!src) return '<div class="player error-box">⚠️ Video unavailable</div>';
     const vert = v.type === 'short';
     return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer">'
