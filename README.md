@@ -1,64 +1,70 @@
 # ⚡ YourVibe — Neon Video Universe
 
-A fully functional YouTube-style app with a neon/cyberpunk look. 100% front-end (HTML + CSS + vanilla JS), zero build tools, zero dependencies to install.
+A YouTube-style neon app with **real server-side uploads** — anyone can publish a video and everyone sees it.
 
-## 🚀 Run it on your PC
+## 🏗️ How it works
 
-**Easiest:** double-click `index.html` (Chrome or Edge recommended).
-
-**Optional (local server):**
 ```
-cd yourvibe
-python -m http.server 8080
+Browser (static site on Render CDN)
+   │  fetch /api/*
+   ▼
+Node API (Render Web Service — server.js)
+   │  metadata        │  video/thumbnail files
+   ▼                  ▼
+Supabase Postgres   Supabase Storage (public bucket "media")
 ```
-then open http://localhost:8080
+
+- **Videos + thumbnails** → stored on the server (Supabase Storage), served from its CDN
+- **Comments, views, likes** → shared in Postgres (everyone sees the same)
+- **Your likes/subs/history/channel look** → private, in your browser (localStorage)
+- **Delete protection** → each upload returns a secret delete key kept in the uploader's browser
 
 ## ✨ Features
 
 | Page | What it does |
 |---|---|
-| 🏠 **Home** | Category chips, 🔥 Trending shelf, ⚡ Shorts shelf, recommended grid |
-| ⚡ **Shorts** | Vertical snap-scroll feed, autoplay on scroll, like / sound toggle, tap to pause |
-| 📺 **Subscriptions** | Videos from channels you subscribed to (+ channel shortcuts) |
-| 📚 **Library** | History, Liked videos, Watch Later, Your uploads |
-| 🎨 **Your Channel** | Banner, avatar, name/handle/bio, your videos + shorts, manage/delete uploads |
-| ⬆️ **Upload** | Drag & drop any video → auto thumbnail capture + duration → publish |
-| ▶️ **Watch** | Custom neon player (seek, volume, fullscreen, keyboard: space/k/m/f, ← →), 👍 like, 🔔 subscribe, comments, share, related videos |
-| 🔍 **Search** | Header search by title / channel / category |
+| 🏠 Home | Category chips, 🔥 Trending, ⚡ Shorts shelf, recommended grid |
+| ⚡ Shorts | Vertical snap-scroll feed, autoplay, like, sound toggle |
+| 📺 Subscriptions | Uploads from creators you subscribed to |
+| 📚 Library | History, Liked, Watch Later, Your uploads |
+| 🎨 Your Channel | Banner/avatar/name/bio, your videos, delete your uploads |
+| ⬆️ Upload | Drag & drop (max 50 MB), **custom thumbnail picker** (or auto-captured frame), duration auto-detected |
+| ▶️ Watch | Custom neon player (keyboard: space/k, m, f, ←→), like, comments, share, related |
 
-## 💾 Where is data stored?
+## 🚀 Run locally
 
-Everything lives **in your browser only**:
+Frontend only: open `index.html` (needs the API for videos — see below).
 
-- `localStorage` → likes, subscriptions, history, comments, channel settings
-- `IndexedDB` → the actual video files you upload (stays after refresh)
+Full stack:
+```
+npm install
+SUPABASE_URL=... SUPABASE_SERVICE_KEY=... DATABASE_URL=... node server.js
+```
+Tables + storage bucket are created automatically on boot.
 
-**Reset everything:** Your Channel → Customize channel → “Reset ALL YourVibe data”.
-(Or clear site data in browser settings.)
+## ☁️ Deploy on Render
 
-## 📦 Copy it to CodePen
-
-CodePen has 3 panels — paste each file:
-
-1. **HTML panel** → everything inside `<body>…</body>` from `index.html` (drop the `<script src>` tags at the bottom, CodePen adds those)
-2. **CSS panel** → all of `css/style.css` + add this line at the very top for the fonts:
-   ```css
-   @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&display=swap');
-   ```
-3. **JS panel** → paste `js/data.js`, then `js/storage.js`, then `js/app.js` (in that order, one after another in the same panel)
-
-Everything works identically in CodePen, including uploads (IndexedDB works there too).
+- **Static Site** → publish dir `.` (the frontend)
+- **Web Service** → `npm install` / `node server.js`, env vars:
+  - `SUPABASE_URL` — https://xxx.supabase.co
+  - `SUPABASE_SERVICE_KEY` — service_role key
+  - `DATABASE_URL` — Postgres connection string
+- The frontend calls the API at `https://yourvibe-api.onrender.com` (override via localStorage `yv_api_base`).
 
 ## 📁 Files
 
 ```
 yourvibe/
-├── index.html      — page shell (header, sidebar, router mount)
-├── css/style.css   — the whole neon theme
-└── js/
-    ├── data.js     — seed channels, videos, shorts, comments
-    ├── storage.js  — localStorage + IndexedDB layer
-    └── app.js      — router, views, player, uploads, everything
+├── index.html      — page shell
+├── css/style.css   — neon theme
+├── js/
+│   ├── data.js     — categories & defaults (no fake content)
+│   ├── storage.js  — localStorage layer
+│   └── app.js      — router, views, player, uploads
+└── server.js       — Express API (uploads, comments, likes, views)
 ```
 
-Seed videos stream from free public sample CDNs (`media.w3.org`, `test-videos.co.uk`, `cdn.plyr.io`, `cdn.jsdelivr.net`, MDN examples), so demo content plays without you uploading anything — needs internet for those, but **your uploads and all interactions work offline**. Cards use neon gradient + emoji thumbnails, so the UI itself never depends on an image CDN.
+## Notes
+
+- Free tiers: Render web service sleeps after inactivity (first API call may take ~1 min); Supabase free project pauses after ~1 week of zero traffic — log in to restore.
+- No accounts/moderation — anyone can upload. Don't post anything private.
