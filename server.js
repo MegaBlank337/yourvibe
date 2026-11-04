@@ -47,12 +47,34 @@ app.use(express.json({ limit: '1mb' }));
 /* ── Postgres (Supabase) with auto-reconnect ── */
 let pg = null;
 let migrated = false;
+let DB_CFG = null;
+
+/* Build a connection config with an IPv4 address (Render free has no IPv6) */
+async function dbConfig() {
+  if (DB_CFG) return DB_CFG;
+  const u = new URL(DB_URL);
+  let host = u.hostname;
+  try {
+    host = await new Promise((res, rej) =>
+      dns.lookup(u.hostname, { family: 4 }, (e, addr) => e ? rej(e) : res(addr)));
+  } catch (e) { /* keep hostname */ }
+  DB_CFG = {
+    host,
+    port: u.port || 5432,
+    user: decodeURIComponent(u.username),
+    password: decodeURIComponent(u.password),
+    database: (u.pathname || '/postgres').slice(1) || 'postgres',
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10000,
+  };
+  return DB_CFG;
+}
 
 async function q(sql, params) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       if (!pg || pg._ended) {
-        pg = new Client({ connectionString: DB_URL, ssl: { rejectUnauthorized: false } });
+        pg = new Client(await dbConfig());
         pg.on('error', () => { try { pg.end(); } catch (e) {} pg = null; });
         await pg.connect();
       }
