@@ -280,7 +280,8 @@ async function streamOut(req, res) {
     const row = r.rows[0];
     const parts = Math.max(1, Number(row.parts) || 1);
     let sizes = [];
-    try { sizes = JSON.parse(row.sizes || '[]').map(Number); } catch (e) { sizes = []; }
+    if (Array.isArray(row.sizes)) sizes = row.sizes.map(Number);
+    else { try { sizes = JSON.parse(row.sizes || '[]').map(Number); } catch (e) { sizes = []; } }
     const paths = [];
     for (let i = 0; i < parts; i++) paths.push(row.video_path.replace(/part\d+\.mp4$/, 'part' + i + '.mp4'));
 
