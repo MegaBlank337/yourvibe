@@ -37,6 +37,51 @@ const SB_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SB_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 const DB_URL = process.env.DATABASE_URL || '';
 
+/* ── GitHub Releases storage (no-card, big files) ── */
+const GH_TOKEN = process.env.GH_TOKEN || '';
+const GH_REPO = process.env.GH_MEDIA_REPO || '';
+const ghMode = () => !!(GH_TOKEN && GH_REPO);
+const ghPartUrl = (id, i) => `https://github.com/${GH_REPO}/releases/download/v-${id}/part${i}.mp4`;
+
+async function ghApi(path, opts = {}) {
+  return fetch(path.startsWith('http') ? path : 'https://api.github.com' + path, Object.assign({}, opts, {
+    headers: Object.assign({
+      Authorization: 'Bearer ' + GH_TOKEN,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'yourvibe',
+    }, opts.headers || {}),
+  }));
+}
+
+/* get-or-create the release that holds one video's segments */
+async function ghReleaseId(tag) {
+  let r = await ghApi(`/repos/${GH_REPO}/releases/tags/${tag}`);
+  if (r.status === 200) return (await r.json()).id;
+  r = await ghApi(`/repos/${GH_REPO}/releases`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag_name: tag, name: tag }),
+  });
+  if (!r.ok) throw new Error('release create failed (' + r.status + ') ' + (await r.text()).slice(0, 120));
+  return (await r.json()).id;
+}
+
+/* upload one segment as a release asset (replaces on name conflict) */
+async function ghPutAsset(tag, name, buffer, ctype) {
+  const rid = await ghReleaseId(tag);
+  const up = async () => await ghApi(
+    `https://uploads.github.com/repos/${GH_REPO}/releases/${rid}/assets?name=${name}`,
+    { method: 'POST', headers: { 'Content-Type': ctype || 'video/mp4' }, body: buffer });
+  let r = await up();
+  if (r.status === 422) { // asset name exists → delete and retry once
+    const list = await (await ghApi(`/repos/${GH_REPO}/releases/${rid}/assets`)).json();
+    for (const a of (list || [])) if (a.name === name) await ghApi(`/repos/${GH_REPO}/releases/assets/${a.id}`, { method: 'DELETE' });
+    r = await up();
+  }
+  if (r.status !== 201) throw new Error('asset upload failed (' + r.status + ') ' + (await r.text()).slice(0, 120));
+  return await r.json();
+}
+
 /* ── CORS (static site calls this API cross-origin) ── */
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -123,6 +168,7 @@ async function migrate() {
   )`);
   await q(`alter table videos add column if not exists parts int default 1`);
   await q(`alter table videos add column if not exists sizes jsonb default '[]'`);
+  await q(`alter table videos add column if not exists store text default 'sb'`);
   await q(`create table if not exists users (
     username text primary key,
     pass_hash text not null,
@@ -305,28 +351,33 @@ app.post('/api/videos/:id/segment', uploadSeg.single('video'), async (req, res) 
     const id = req.params.id;
     if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'bad id' });
     const idx = Math.max(0, Math.min(45, parseInt((req.body && req.body.index) || '0', 10) || 0));
+
+    if (ghMode()) {
+      const asset = await ghPutAsset('v-' + id, 'part' + idx + '.mp4', f.buffer, f.mimetype || 'video/mp4');
+      return res.json({ index: idx, size: f.size, url: asset.browser_download_url, store: 'gh' });
+    }
+
     const p = partPath(id, idx);
     await sbPut(p, f.buffer, f.mimetype || 'video/mp4');
-    res.json({ index: idx, size: f.size, url: pubUrl(p) });
+    res.json({ index: idx, size: f.size, url: pubUrl(p), store: 'sb' });
   } catch (e) {
     console.error('segment error:', e.message);
     res.status(500).json({ error: 'segment upload failed' });
   }
 });
 
-async function partSize(objPath) {
+/* size of a remote part (Supabase object or GitHub asset) */
+async function partSize(url, store) {
+  const authHeaders = store === 'gh' && GH_TOKEN
+    ? { Authorization: 'Bearer ' + GH_TOKEN, 'User-Agent': 'yourvibe' }
+    : { Authorization: 'Bearer ' + SB_KEY, apikey: SB_KEY };
   try {
-    const r = await fetch(SB_URL + '/storage/v1/object/media/' + objPath, {
-      method: 'HEAD',
-      headers: { Authorization: 'Bearer ' + SB_KEY, apikey: SB_KEY },
-    });
+    const r = await fetch(url, { method: 'HEAD', headers: authHeaders });
     const cl = Number(r.headers.get('content-length'));
-    if (r.ok && cl > 0) return cl;
+    if (cl > 0) return cl;
   } catch (e) {}
   try {
-    const r = await fetch(SB_URL + '/storage/v1/object/media/' + objPath, {
-      headers: { Authorization: 'Bearer ' + SB_KEY, apikey: SB_KEY, Range: 'bytes=0-0' },
-    });
+    const r = await fetch(url, { headers: Object.assign({}, authHeaders, { Range: 'bytes=0-0' }) });
     const cr = r.headers.get('content-range'); // bytes 0-0/TOTAL
     if (cr) return Number(cr.split('/')[1]) || 0;
   } catch (e) {}
@@ -339,9 +390,13 @@ app.post('/api/videos/complete', async (req, res) => {
     const id = String(b.id || '');
     if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'bad id' });
     const parts = Math.max(1, Math.min(46, parseInt(b.parts, 10) || 1));
+    const store = ghMode() ? 'gh' : 'sb';
 
+    const partUrl0 = store === 'gh' ? ghPartUrl(id, 0) : pubUrl(partPath(id, 0));
     const sizes = [];
-    for (let i = 0; i < parts; i++) sizes.push(await partSize(partPath(id, i)));
+    for (let i = 0; i < parts; i++) {
+      sizes.push(await partSize(store === 'gh' ? ghPartUrl(id, i) : SB_URL + '/storage/v1/object/media/' + partPath(id, i), store));
+    }
     if (!sizes[0]) return res.status(400).json({ error: 'segments missing — upload failed' });
 
     let thumbPath = null, thumbUrl = null;
@@ -363,14 +418,14 @@ app.post('/api/videos/complete', async (req, res) => {
     const authName = await authUser(req);
     const uploader = authName || String(b.uploader || 'Anonymous').slice(0, 50);
 
-    await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes)
-             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-      [id, title, description, category, type, duration, uploader, videoPath, thumbPath, pubUrl(videoPath), thumbUrl, delKey, parts, JSON.stringify(sizes)]);
+    await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes,store)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      [id, title, description, category, type, duration, uploader, videoPath, thumbPath, partUrl0, thumbUrl, delKey, parts, JSON.stringify(sizes), store]);
 
     /* every uploader gets a creators row so subscriber counts always exist */
     try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [uploader]); } catch (e) {}
 
-    res.status(201).json({ id, video_url: pubUrl(videoPath), thumb_url: thumbUrl, del_key: delKey, parts });
+    res.status(201).json({ id, video_url: partUrl0, thumb_url: thumbUrl, del_key: delKey, parts, store });
   } catch (e) {
     console.error('complete error:', e.message);
     res.status(500).json({ error: 'publish failed' });
@@ -380,17 +435,24 @@ app.post('/api/videos/complete', async (req, res) => {
 /* ── Stream a (possibly multi-segment) video as ONE file with Range support ── */
 async function streamOut(req, res) {
   try {
-    const r = await q('select video_path, parts, sizes from videos where id = $1', [req.params.id]);
+    const r = await q('select video_path, parts, sizes, store from videos where id = $1', [req.params.id]);
     if (!r.rows.length) { res.status(404).end(); return; }
     const row = r.rows[0];
     const parts = Math.max(1, Number(row.parts) || 1);
+    const store = row.store === 'gh' ? 'gh' : 'sb';
     let sizes = [];
     if (Array.isArray(row.sizes)) sizes = row.sizes.map(Number);
     else { try { sizes = JSON.parse(row.sizes || '[]').map(Number); } catch (e) { sizes = []; } }
     const paths = [];
-    for (let i = 0; i < parts; i++) paths.push(row.video_path.replace(/part\d+\.mp4$/, 'part' + i + '.mp4'));
+    for (let i = 0; i < parts; i++) {
+      paths.push(store === 'gh'
+        ? ghPartUrl(req.params.id, i)
+        : SB_URL + '/storage/v1/object/media/' + row.video_path.replace(/part\d+\.mp4$/, 'part' + i + '.mp4'));
+    }
 
-    const authH = { Authorization: 'Bearer ' + SB_KEY, apikey: SB_KEY };
+    const authH = store === 'gh'
+      ? { Authorization: 'Bearer ' + GH_TOKEN, 'User-Agent': 'yourvibe' }
+      : { Authorization: 'Bearer ' + SB_KEY, apikey: SB_KEY };
     const pipe = async body => { for await (const chunk of body) { if (!res.write(chunk)) await new Promise(w => res.once('drain', w)); } };
 
     const total = sizes.reduce((a, b) => a + (b || 0), 0);
@@ -401,7 +463,7 @@ async function streamOut(req, res) {
       res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('Content-Type', 'video/mp4');
       for (const p of paths) {
-        const rr = await fetch(SB_URL + '/storage/v1/object/media/' + p, { headers: authH });
+        const rr = await fetch(p, { headers: authH });
         if (rr.ok) await pipe(rr.body);
       }
       res.end();
@@ -429,7 +491,7 @@ async function streamOut(req, res) {
       if (segEnd < cursor) continue;
       const from = cursor - segStart;
       const to = end - segStart;
-      const rr = await fetch(SB_URL + '/storage/v1/object/media/' + paths[i], {
+      const rr = await fetch(paths[i], {
         headers: Object.assign({}, authH, { Range: `bytes=${from}-${to}` }),
       });
       if (rr.ok) await pipe(rr.body);
@@ -483,7 +545,7 @@ app.post('/api/videos/:id/comments', async (req, res) => {
 app.delete('/api/videos/:id', async (req, res) => {
   try {
     const key = (req.body && req.body.del_key) || '';
-    const r = await q('select video_path, thumb_path, del_key, parts, uploader from videos where id = $1', [req.params.id]);
+    const r = await q('select video_path, thumb_path, del_key, parts, uploader, store from videos where id = $1', [req.params.id]);
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
     const row = r.rows[0];
     /* owner = matching delete key OR logged-in account that uploaded it */
@@ -491,12 +553,24 @@ app.delete('/api/videos/:id', async (req, res) => {
     const owner = (key && key === row.del_key) || (authName && authName === row.uploader);
     if (!owner) return res.status(403).json({ error: 'not your video' });
     await q('delete from videos where id = $1', [req.params.id]); // cascades comments
-    const parts = Math.max(1, Number(row.parts) || 1);
-    for (let i = 0; i < parts; i++) {
-      if (/part\d+\.mp4$/.test(row.video_path)) {
-        await sbDelete(row.video_path.replace(/part\d+\.mp4$/, 'part' + i + '.mp4'));
-      } else if (i === 0) {
-        await sbDelete(row.video_path);
+
+    if (row.store === 'gh' && ghMode()) {
+      /* delete the whole release + its git tag */
+      const tag = 'v-' + req.params.id;
+      const rel = await ghApi(`/repos/${GH_REPO}/releases/tags/${tag}`);
+      if (rel.status === 200) {
+        const rid = (await rel.json()).id;
+        await ghApi(`/repos/${GH_REPO}/releases/${rid}`, { method: 'DELETE' }).catch(() => {});
+      }
+      await ghApi(`/repos/${GH_REPO}/git/refs/tags/${tag}`, { method: 'DELETE' }).catch(() => {});
+    } else {
+      const parts = Math.max(1, Number(row.parts) || 1);
+      for (let i = 0; i < parts; i++) {
+        if (/part\d+\.mp4$/.test(row.video_path)) {
+          await sbDelete(row.video_path.replace(/part\d+\.mp4$/, 'part' + i + '.mp4'));
+        } else if (i === 0) {
+          await sbDelete(row.video_path);
+        }
       }
     }
     if (row.thumb_path) await sbDelete(row.thumb_path);
