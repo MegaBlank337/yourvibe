@@ -18,7 +18,8 @@ YV.store = (function () {
     comments: {},   // { videoId: [{u,t,h}] } user comments
     over: {},       // { videoId: extraViews } view counter overlay
     myChannel: null,// configured in Settings
-    myVideos: [],   // uploaded video records
+    myDelKeys: {},  // { videoId: secret delete key } for uploads from this browser
+    myVideos: [],   // (legacy, unused)
   };
 
   function load() {
