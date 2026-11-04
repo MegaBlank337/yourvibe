@@ -20,6 +20,11 @@ const multer = require('multer');
 const { Client } = require('pg');
 const crypto = require('crypto');
 const path = require('path');
+const dns = require('dns');
+
+/* Supabase db.* hosts resolve to IPv6 first, but Render free
+   instances have no IPv6 egress — force IPv4. */
+try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
