@@ -253,6 +253,8 @@ app.get('/api/videos', async (req, res) => {
 
 app.get('/api/creators', async (req, res) => {
   try {
+    /* self-heal: every uploader that appears in videos gets a counter row */
+    await q('insert into creators (name, subs) select distinct uploader, 0 from videos on conflict (name) do nothing').catch(() => {});
     const r = await q('select name, subs from creators');
     const out = {};
     r.rows.forEach(row => out[row.name] = num(row.subs));
