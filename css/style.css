@@ -862,6 +862,13 @@ body.has-ann main { padding-top: 138px; }
   background: linear-gradient(90deg, rgba(255, 43, 214, .18), rgba(0, 229, 255, .14));
   border-bottom: 1px solid var(--line);
 }
+.admin-ver {
+  font-style: normal; font-size: 10px; letter-spacing: 1px;
+  color: var(--cyan); opacity: .8;
+  border: 1px solid rgba(0, 229, 255, .4); border-radius: 6px;
+  padding: 2px 7px; margin-left: 8px; vertical-align: 2px;
+  text-shadow: 0 0 8px rgba(0, 229, 255, .5);
+}
 .admin-close { font-size: 16px; color: var(--mut); }
 .admin-close:hover { color: #fff; text-shadow: 0 0 10px var(--pink); }
 
