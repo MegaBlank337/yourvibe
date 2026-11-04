@@ -1088,7 +1088,7 @@
     d.id = 'adminPanel';
     d.innerHTML =
       '<div class="admin-box">'
-      + '<div class="admin-head"><span>⚡ ADMIN PANEL</span><button class="admin-close" id="adminClose">✕</button></div>'
+      + '<div class="admin-head"><span>⚡ ADMIN PANEL <em class="admin-ver">v' + (window.YV_V || '?') + '</em></span><button class="admin-close" id="adminClose">✕</button></div>'
       + '<div class="admin-pin" id="adminPinRow">'
       + '<input type="password" id="adminPin" placeholder="PIN" maxlength="10">'
       + '<button class="pill-btn" id="adminUnlock">Unlock</button>'
