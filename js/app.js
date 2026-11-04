@@ -950,6 +950,26 @@
     }
   }
 
+  /* move guest uploads from this browser into the logged-in account */
+  async function claimMyVideos(silent) {
+    if (!S.auth || !S.auth.token) return 0;
+    const ids = Object.keys(S.myDelKeys || {});
+    if (!ids.length) return 0;
+    try {
+      const r = await api('/api/auth/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ claims: ids.map(id => ({ id, del_key: S.myDelKeys[id] })) }),
+      });
+      if (r.moved > 0) {
+        videosLoaded = false;
+        toast('Moved ' + r.moved + ' guest video' + (r.moved === 1 ? '' : 's') + ' to @' + S.auth.username, '📦');
+        if (!silent) { await loadVideos(); navigate(); }
+      }
+      return r.moved || 0;
+    } catch (e) { return 0; }
+  }
+
   function renderMe() {
     const el = $('#meAvatar');
     if (S.auth && S.auth.username) {
@@ -1014,6 +1034,7 @@
         YV.store.save();
         renderMe();
         toast(mode === 'login' ? 'Welcome back, @' + r.username + '!' : 'Account created — welcome, @' + r.username + '!', '✨');
+        await claimMyVideos();
         location.hash = '#/upload';
       } catch (ex) {
         $('#auErr').textContent = '⚠️ ' + (ex.message || 'failed');
@@ -1050,6 +1071,7 @@
       + '<div class="admin-row"><input type="number" id="adminN_subs" value="1000" min="0" max="10000000"><button class="pill-btn" data-admin="subs">🔔 + Subscribers</button></div>'
       + '<div class="admin-row"><input type="number" id="adminN_comments" value="100" min="1" max="500"><button class="pill-btn" data-admin="comments">💬 + Random comments</button></div>'
       + '<div class="admin-row"><input type="number" id="adminN_commentsru" value="100" min="1" max="500"><button class="pill-btn" data-admin="commentsru">🇷🇺 + Комменты (RU)</button></div>'
+      + '<div class="admin-row"><input type="text" id="adminTransferTo" maxlength="50" placeholder="account / creator name"><button class="pill-btn" data-admin="transfer">📦 Transfer video to name</button></div>'
       + '</div>'
       + '<p class="muted-txt">Applies on the server — everyone sees it. Comments come from randomly generated accounts.</p>'
       + '</div></div>';
@@ -1096,6 +1118,24 @@
   async function adminAction(kind) {
     const id = $('#adminVideoSel') && $('#adminVideoSel').value;
     if (!id) { toast('No video selected', '⚠️'); return; }
+
+    if (kind === 'transfer') {
+      const to = ($('#adminTransferTo') && $('#adminTransferTo').value || '').trim();
+      if (!to) { toast('Enter the account name to transfer to', '⚠️'); return; }
+      if (!confirm('Transfer this video to "' + to + '"?')) return;
+      try {
+        await api('/api/admin/video/' + id + '/transfer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
+          body: JSON.stringify({ to })
+        });
+        await loadVideos();
+        toast('Video transferred to ' + to + ' ✅', '📦');
+        navigate();
+      } catch (e) { toast('Transfer failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
+
     const input = $('#adminN_' + kind);
     let n = parseInt(input && input.value, 10);
     if (!Number.isFinite(n) || n < 0) { toast('Enter a number', '⚠️'); return; }
@@ -1258,4 +1298,6 @@
   renderMe();
   window.addEventListener('hashchange', navigate);
   navigate();
+  /* if logged in, quietly pull any guest uploads into the account */
+  claimMyVideos(true).then(moved => { if (moved > 0) navigate(); });
 })();
