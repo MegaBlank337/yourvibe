@@ -771,6 +771,60 @@ main > * { animation: fadeUp .38s ease both; }
 .prev-head h3 { font-family: 'Orbitron', sans-serif; letter-spacing: 1px; }
 .file-row { display: flex; align-items: center; gap: 13px; flex-wrap: wrap; }
 
+/* ══════════ ADMIN PANEL (F4) ══════════ */
+.admin-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(3, 4, 12, .78);
+  backdrop-filter: blur(8px);
+  animation: fadeIn .2s ease;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.admin-box {
+  width: min(480px, 92vw);
+  border-radius: 18px;
+  background: var(--bg1);
+  border: 1px solid rgba(255, 43, 214, .5);
+  box-shadow: 0 0 40px rgba(255, 43, 214, .25), 0 0 80px rgba(0, 229, 255, .12);
+  overflow: hidden;
+}
+.admin-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px;
+  font-family: 'Orbitron', sans-serif; font-size: 14px; letter-spacing: 2px;
+  background: linear-gradient(90deg, rgba(255, 43, 214, .18), rgba(0, 229, 255, .14));
+  border-bottom: 1px solid var(--line);
+}
+.admin-close { font-size: 16px; color: var(--mut); }
+.admin-close:hover { color: #fff; text-shadow: 0 0 10px var(--pink); }
+
+.admin-pin { display: flex; gap: 10px; padding: 22px 18px; }
+.admin-pin input {
+  flex: 1; background: rgba(10, 12, 28, .85);
+  border: 1px solid var(--line); border-radius: 10px;
+  color: var(--txt); padding: 10px 14px; outline: none; letter-spacing: 3px;
+  font-family: 'Orbitron', sans-serif;
+}
+.admin-pin input:focus { border-color: rgba(255, 43, 214, .6); box-shadow: 0 0 12px rgba(255, 43, 214, .25); }
+
+.admin-body { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+.admin-body .field { width: 100%; }
+.admin-body select {
+  width: 100%; background: rgba(10, 12, 28, .85);
+  border: 1px solid var(--line); border-radius: 10px;
+  color: var(--txt); padding: 10px 12px; outline: none; font-weight: 600;
+}
+.admin-grid { display: flex; flex-direction: column; gap: 9px; }
+.admin-row { display: flex; gap: 9px; }
+.admin-row input {
+  width: 110px; background: rgba(10, 12, 28, .85);
+  border: 1px solid var(--line); border-radius: 10px;
+  color: var(--txt); padding: 9px 12px; outline: none;
+}
+.admin-row input:focus { border-color: rgba(0, 229, 255, .6); }
+.admin-row .pill-btn { flex: 1; justify-content: center; }
+
 /* ══════════ TOASTS ══════════ */
 .toasts {
   position: fixed; right: 22px; bottom: 22px; z-index: 100;
