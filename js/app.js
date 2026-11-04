@@ -33,10 +33,16 @@
   }
 
   let VIDEOS = [];
+  let CREATORS = {};   // { uploaderName: subscriberCount }
   let videosLoaded = false;
 
   async function loadVideos() {
-    VIDEOS = await api('/api/videos');
+    const [vids, creators] = await Promise.all([
+      api('/api/videos'),
+      api('/api/creators').catch(() => ({})),
+    ]);
+    VIDEOS = vids;
+    CREATORS = creators || {};
     videosLoaded = true;
   }
 
@@ -118,13 +124,14 @@
 
   const isLiked = id => !!S.likes[id];
   const isSub = name => !!S.subs[name];
-  const likesOf = v => (v.likes || 0) + (isLiked(v.id) ? 1 : 0);
-  const viewsOf = v => v.views || 0;
+  const likesOf = v => (Number(v.likes) || 0) + (isLiked(v.id) ? 1 : 0);
+  const viewsOf = v => Number(v.views) || 0;
+  const subsOfCreator = name => Number(CREATORS[name]) || 0;
   const agoOf = v => timeAgo(v.created_at ? Date.parse(v.created_at) : 0);
   const srcOf = v => v.video_url;
 
   function bumpView(v) {
-    v.views = (v.views || 0) + 1;
+    v.views = (Number(v.views) || 0) + 1;
     api('/api/videos/' + v.id + '/view', { method: 'POST' }).catch(() => {});
   }
 
@@ -377,7 +384,7 @@
       + '<div class="ch-head">'
       + '<span class="ch-ava">' + avatarHTML({ name: n, colors: pal, isMe: n === S.myChannel.name }, 96) + '</span>'
       + '<div class="ch-id"><h1 class="ch-name-big">' + esc(n) + '</h1>'
-      + '<div class="ch-sub">' + vids.length + ' video' + (vids.length === 1 ? '' : 's') + ' on YourVibe</div></div>'
+      + '<div class="ch-sub">' + (subsOfCreator(n) ? fmtNum(subsOfCreator(n)) + ' subscribers · ' : '') + vids.length + ' video' + (vids.length === 1 ? '' : 's') + '</div></div>'
       + subBtnHTML(n)
       + '</div>'
       + '<div class="ch-tabs">'
@@ -454,7 +461,7 @@
       + '<div class="w-row">'
       + '<a class="ch-link" href="#/c/' + encodeURIComponent(v.uploader) + '">' + avatarHTML(up, 42)
       + '<div><div class="wl-name">' + esc(v.uploader) + '</div>'
-      + '<div class="wl-subs">' + (up.isMe ? 'your channel' : 'creator on YourVibe') + '</div></div></a>'
+      + '<div class="wl-subs">' + (up.isMe ? 'your channel' : (subsOfCreator(v.uploader) ? fmtNum(subsOfCreator(v.uploader)) + ' subscribers' : 'creator on YourVibe')) + '</div></div></a>'
       + subBtnHTML(v.uploader)
       + '<span class="w-spacer"></span>'
       + likeGroupHTML(v)
@@ -613,7 +620,7 @@
       + '<div class="dz-s">or <span class="dz-browse">browse files</span></div>'
       + '<div class="dz-name" id="dzName"></div></div>'
       + '<form class="up-form" id="upForm" novalidate>'
-      + '<div class="field"><label>Your channel name</label><input id="upChannel" maxlength="40" value="' + esc(S.myChannel.name) + '" placeholder="How your name appears"></div>'
+      + '<p class="muted-txt">Uploading as <b>' + esc(S.myChannel.name) + '</b> — change it in ⚙ Customize channel.</p>'
       + '<div class="field"><label>Title</label><input id="upTitle" maxlength="90" placeholder="Give it a neon title…" required></div>'
       + '<div class="field"><label>Description</label><textarea id="upDesc" rows="4" placeholder="Tell the vibe…"></textarea></div>'
       + '<div class="field-row">'
@@ -693,7 +700,6 @@
     $('#upForm').addEventListener('submit', async e => {
       e.preventDefault();
       if (!file) { err('⚠️ Pick a video first.'); return; }
-      const channel = $('#upChannel').value.trim() || S.myChannel.name;
       const title = upTitle.value.trim() || 'Untitled vibe';
       publish.disabled = true; publish.textContent = '⏳ Uploading…';
       try {
@@ -705,10 +711,9 @@
         fd.append('category', $('#upCat').value);
         fd.append('type', $('input[name="upType"]:checked').value);
         fd.append('duration', dur ? fmtDur(dur) : '');
-        fd.append('uploader', channel);
+        fd.append('uploader', S.myChannel.name);
 
         const res = await api('/api/videos', { method: 'POST', body: fd });
-        S.myChannel.name = channel;
         if (res.del_key) S.myDelKeys[res.id] = res.del_key;
         YV.store.save();
         await loadVideos();
@@ -793,8 +798,8 @@
     YV.store.save();
     try {
       const r = await api('/api/videos/' + id + '/like', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ delta }) });
-      v.likes = r.likes;
-    } catch (e) { v.likes = (v.likes || 0) + Math.max(0, delta); }
+      v.likes = Number(r.likes) || 0;
+    } catch (e) { v.likes = (Number(v.likes) || 0) + Math.max(0, delta); }
     updateLikeUI(id);
   }
 
@@ -868,6 +873,105 @@
   function renderMe() {
     $('#meAvatar').innerHTML = avatarHTML(meCh(), 36);
   }
+
+  /* ═══════════ ADMIN PANEL (press F4) ═══════════ */
+  const ADMIN_PIN = '1337';
+  const ADMIN_KEY = 'neon-admin';
+
+  function adminUnlocked() {
+    try { return sessionStorage.getItem('yv_admin') === '1'; } catch (e) { return false; }
+  }
+
+  function buildAdminPanel() {
+    if ($('#adminPanel')) return;
+    const d = document.createElement('div');
+    d.className = 'admin-overlay hide';
+    d.id = 'adminPanel';
+    d.innerHTML =
+      '<div class="admin-box">'
+      + '<div class="admin-head"><span>⚡ ADMIN PANEL</span><button class="admin-close" id="adminClose">✕</button></div>'
+      + '<div class="admin-pin" id="adminPinRow">'
+      + '<input type="password" id="adminPin" placeholder="PIN" maxlength="10">'
+      + '<button class="pill-btn" id="adminUnlock">Unlock</button>'
+      + '</div>'
+      + '<div class="admin-body hide" id="adminBody">'
+      + '<div class="field"><label>Video</label><select id="adminVideoSel"></select></div>'
+      + '<div class="admin-grid">'
+      + '<div class="admin-row"><input type="number" id="adminN_views" value="1000" min="0" max="1000000"><button class="pill-btn" data-admin="views">👁 + Views</button></div>'
+      + '<div class="admin-row"><input type="number" id="adminN_likes" value="500" min="0" max="1000000"><button class="pill-btn" data-admin="likes">❤️ + Likes</button></div>'
+      + '<div class="admin-row"><input type="number" id="adminN_subs" value="1000" min="0" max="10000000"><button class="pill-btn" data-admin="subs">🔔 + Subscribers</button></div>'
+      + '<div class="admin-row"><input type="number" id="adminN_comments" value="100" min="1" max="500"><button class="pill-btn" data-admin="comments">💬 + Random comments</button></div>'
+      + '</div>'
+      + '<p class="muted-txt">Applies on the server — everyone sees it. Comments come from randomly generated accounts.</p>'
+      + '</div></div>';
+    document.body.appendChild(d);
+
+    $('#adminClose').onclick = () => d.classList.add('hide');
+    d.addEventListener('click', e => { if (e.target === d) d.classList.add('hide'); });
+    $('#adminUnlock').onclick = () => {
+      if ($('#adminPin').value === ADMIN_PIN) {
+        try { sessionStorage.setItem('yv_admin', '1'); } catch (e) {}
+        $('#adminPinRow').classList.add('hide');
+        $('#adminBody').classList.remove('hide');
+        fillAdminVideos();
+      } else toast('Wrong PIN 🚫', '🔒');
+    };
+    $('#adminPin').addEventListener('keydown', e => { if (e.key === 'Enter') $('#adminUnlock').click(); });
+    d.addEventListener('click', e => {
+      const b = e.target.closest('[data-admin]');
+      if (b) adminAction(b.dataset.admin);
+    });
+  }
+
+  function fillAdminVideos() {
+    const sel = $('#adminVideoSel');
+    if (!sel) return;
+    sel.innerHTML = VIDEOS.length
+      ? VIDEOS.map(v => '<option value="' + v.id + '">' + esc(v.title.slice(0, 45)) + ' — ' + esc(v.uploader) + '</option>').join('')
+      : '<option value="">No videos yet</option>';
+  }
+
+  function toggleAdminPanel() {
+    buildAdminPanel();
+    const d = $('#adminPanel');
+    d.classList.toggle('hide');
+    if (!d.classList.contains('hide')) {
+      const unlocked = adminUnlocked();
+      $('#adminPinRow').classList.toggle('hide', unlocked);
+      $('#adminBody').classList.toggle('hide', !unlocked);
+      if (unlocked) fillAdminVideos();
+      else { const p = $('#adminPin'); p.value = ''; p.focus(); }
+    }
+  }
+
+  async function adminAction(kind) {
+    const id = $('#adminVideoSel') && $('#adminVideoSel').value;
+    if (!id) { toast('No video selected', '⚠️'); return; }
+    const input = $('#adminN_' + kind);
+    let n = parseInt(input && input.value, 10);
+    if (!Number.isFinite(n) || n < 0) { toast('Enter a number', '⚠️'); return; }
+    if (kind === 'comments') n = Math.min(500, Math.max(1, n));
+    else n = Math.min(10000000, Math.max(0, n));
+
+    const label = { views: 'views', likes: 'likes', subs: 'subscribers', comments: 'comments' }[kind];
+    toast('Adding ' + n + ' ' + label + '…', '⏳');
+    try {
+      await api('/api/admin/video/' + id + '/' + kind, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
+        body: JSON.stringify({ n })
+      });
+      await loadVideos();
+      toast('Done — ' + n + ' ' + label + ' added ✅', '⚡');
+      navigate();
+    } catch (e) {
+      toast('Failed: ' + (e.message || 'error'), '⚠️');
+    }
+  }
+
+  window.addEventListener('keydown', e => {
+    if (e.key === 'F4') { e.preventDefault(); toggleAdminPanel(); }
+  });
 
   /* ═══════════ global events ═══════════ */
   document.addEventListener('click', e => {
