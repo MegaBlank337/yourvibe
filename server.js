@@ -808,6 +808,12 @@ async function streamOut(req, res) {
     }
     const parts = Math.max(1, Number(row.parts) || 1);
     const store = row.store === 'gh' ? 'gh' : 'sb';
+
+    /* single-file video → redirect straight to the CDN (works even for
+       players holding old /stream links after a background merge) */
+    if (parts === 1 && row.video_url) {
+      return res.redirect(302, row.video_url);
+    }
     let sizes = [];
     if (Array.isArray(row.sizes)) sizes = row.sizes.map(Number);
     else { try { sizes = JSON.parse(row.sizes || '[]').map(Number); } catch (e) { sizes = []; } }
