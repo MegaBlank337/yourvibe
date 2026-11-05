@@ -165,7 +165,9 @@
     if (!uniq.length) return;
     try {
       const m = await api('/api/avatars?names=' + encodeURIComponent(uniq.slice(0, 60).join(',')));
+      const before = Object.keys(AVATARS).length;
       Object.assign(AVATARS, m || {});
+      if (Object.keys(AVATARS).length !== before && typeof renderMe === 'function') renderMe();
     } catch (e) {}
   }
 
@@ -910,15 +912,21 @@
       const f = e.target.files[0]; if (!f) return;
       $('#avaMsg').textContent = 'processing…';
       avaData = await imageToDataURL(f, 160, 160);
-      $('#avaMsg').textContent = avaData ? '✅ ready' : '⚠️ could not read image';
-      if (avaData) $('#prevAva').innerHTML = '<span class="av av-img" style="width:72px;height:72px"><img src="' + avaData + '"></span>';
+      $('#avaMsg').textContent = avaData ? '✅ ready' : '⚠️ could not read image (try a JPG/PNG)';
+      if (avaData) {
+        $('#prevAva').innerHTML = '<span class="av av-img" style="width:72px;height:72px"><img src="' + avaData + '"></span>';
+        if (S.auth && S.auth.token) saveProfileToAccount({ avatar: avaData, banner: banData }); // instant account save
+      }
     };
     $('#banIn').onchange = async e => {
       const f = e.target.files[0]; if (!f) return;
       $('#banMsg').textContent = 'processing…';
       banData = await imageToDataURL(f, 960, 220);
-      $('#banMsg').textContent = banData ? '✅ ready' : '⚠️ could not read image';
-      if (banData) { const b = $('#prevBanner'); b.classList.add('has-img'); b.style.backgroundImage = 'url(' + banData + ')'; }
+      $('#banMsg').textContent = banData ? '✅ ready' : '⚠️ could not read image (try a JPG/PNG)';
+      if (banData) {
+        const b = $('#prevBanner'); b.classList.add('has-img'); b.style.backgroundImage = 'url(' + banData + ')';
+        if (S.auth && S.auth.token) saveProfileToAccount({ avatar: avaData, banner: banData }); // instant account save
+      }
     };
     $('#stName') && ($('#stName').oninput = e => $('#prevName').textContent = e.target.value || '…');
 
@@ -1083,9 +1091,23 @@
     if (!S.auth || !S.auth.token) return;
     try {
       const me = await api('/api/auth/me');
-      if (me.avatar) S.myChannel.avatar = me.avatar;
+      if (me.avatar) { S.myChannel.avatar = me.avatar; AVATARS[S.auth.username.toLowerCase()] = me.avatar; }
       if (me.banner) S.myChannel.banner = me.banner;
       YV.store.save();
+      renderMe();
+    } catch (e) {}
+  }
+
+  /* save avatar/banner to the account immediately when picked */
+  async function saveProfileToAccount(patch) {
+    if (!S.auth || !S.auth.token) return;
+    try {
+      await api('/api/auth/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      });
+      if (patch.avatar) AVATARS[S.auth.username.toLowerCase()] = patch.avatar;
       renderMe();
     } catch (e) {}
   }
