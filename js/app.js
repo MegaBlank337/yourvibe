@@ -335,6 +335,7 @@
       const up = upOf(s);
       return '<section class="short" data-short="' + s.id + '">'
         + '<video loop muted playsinline preload="metadata"' + (s.thumb_url ? ' poster="' + s.thumb_url + '"' : '') + ' src="' + srcOf(s) + '"></video>'
+        + '<div class="v-spin v-spin-s"><i></i></div>'
         + '<div class="short-panel">'
         + '<div class="short-info">' + avatarHTML(up, 34)
         + '<div class="si-txt"><b>' + esc(s.uploader) + '</b></div>' + subBtnHTML(s.uploader, true) + '</div>'
@@ -358,7 +359,21 @@
         vid.play().catch(() => {});
       } else vid.pause();
     }), { threshold: 0.6 });
-    $$('.shorts-feed video').forEach(v => io.observe(v));
+    $$('.shorts-feed video').forEach(v => {
+      io.observe(v);
+      const sp = v.parentElement.querySelector('.v-spin');
+      if (sp) {
+        const on = () => sp.classList.add('on');
+        const off = () => sp.classList.remove('on');
+        v.addEventListener('waiting', on);
+        v.addEventListener('seeking', () => { if (v.readyState < 3) on(); });
+        v.addEventListener('playing', off);
+        v.addEventListener('canplay', off);
+        v.addEventListener('seeked', off);
+        v.addEventListener('pause', off);
+        on();
+      }
+    });
     cleanups.push(() => io.disconnect());
 
     if (startId) {
@@ -501,6 +516,7 @@
     const vert = v.type === 'short';
     return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer">'
       + '<video id="yvVideo" src="' + src + '" playsinline ' + (v.thumb_url ? 'poster="' + v.thumb_url + '" ' : '') + '></video>'
+      + '<div class="v-spin" id="yvSpin"><i></i></div>'
       + '<button class="big-play" id="yvBig" aria-label="Play">▶</button>'
       + '<div class="controls">'
       + '<div class="seek" id="yvSeek"><div class="seek-fill" id="yvFill"><i class="seek-knob"></i></div></div>'
@@ -562,6 +578,22 @@
     const P = $('#yvPlayer'); if (!P) return;
     const V = $('#yvVideo'), big = $('#yvBig'), playB = $('#yvPlayB'), muteB = $('#yvMute'),
       vol = $('#yvVol'), timeEl = $('#yvTime'), seek = $('#yvSeek'), fill = $('#yvFill'), full = $('#yvFull');
+
+    /* YouTube-style buffering spinner */
+    const spin = $('#yvSpin');
+    if (spin) {
+      const showSpin = () => spin.classList.add('on');
+      const hideSpin = () => spin.classList.remove('on');
+      V.addEventListener('waiting', showSpin);
+      V.addEventListener('seeking', () => { if (V.readyState < 3) showSpin(); });
+      V.addEventListener('stalled', () => { if (V.readyState < 3) showSpin(); });
+      V.addEventListener('playing', hideSpin);
+      V.addEventListener('canplay', hideSpin);
+      V.addEventListener('seeked', hideSpin);
+      V.addEventListener('pause', hideSpin);
+      V.addEventListener('error', hideSpin);
+      showSpin();
+    }
 
     const fmt = s => { if (!isFinite(s)) return '0:00'; s = Math.max(0, Math.floor(s)); const m = Math.floor(s / 60); return m + ':' + String(s % 60).padStart(2, '0'); };
     const setFill = p => fill.style.width = (p * 100) + '%';
