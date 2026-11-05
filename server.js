@@ -493,6 +493,19 @@ app.post('/api/videos/complete', async (req, res) => {
    prefetched in the background while the current one plays → instant switches. ── */
 const segCache = new Map(); // url -> { buf: Buffer|null, done: boolean }
 
+/* video meta cache: skip the DB round-trip on hot streams */
+const metaCache = new Map(); // id -> row (LRU 100)
+function metaGet(id) {
+  if (!metaCache.has(id)) return null;
+  const row = metaCache.get(id);
+  metaCache.delete(id); metaCache.set(id, row); // refresh LRU position
+  return row;
+}
+function metaSet(id, row) {
+  metaCache.set(id, row);
+  while (metaCache.size > 100) metaCache.delete(metaCache.keys().next().value);
+}
+
 function segWarm(url, authH) {
   if (segCache.has(url)) return;
   const e = { buf: null, done: false };
@@ -519,9 +532,13 @@ function segSlice(url, from, to, res) {
 
 async function streamOut(req, res) {
   try {
-    const r = await q('select video_path, parts, sizes, store from videos where id = $1', [req.params.id]);
-    if (!r.rows.length) { res.status(404).end(); return; }
-    const row = r.rows[0];
+    let row = metaGet(req.params.id);
+    if (!row) {
+      const r = await q('select video_path, parts, sizes, store from videos where id = $1', [req.params.id]);
+      if (!r.rows.length) { res.status(404).end(); return; }
+      row = r.rows[0];
+      metaSet(req.params.id, row);
+    }
     const parts = Math.max(1, Number(row.parts) || 1);
     const store = row.store === 'gh' ? 'gh' : 'sb';
     let sizes = [];
@@ -643,6 +660,7 @@ app.delete('/api/videos/:id', async (req, res) => {
     const authName = await authUser(req);
     const owner = (key && key === row.del_key) || (authName && authName === row.uploader);
     if (!owner) return res.status(403).json({ error: 'not your video' });
+    metaCache.delete(req.params.id);
     await q('delete from videos where id = $1', [req.params.id]); // cascades comments
 
     if (row.store === 'gh' && ghMode()) {
