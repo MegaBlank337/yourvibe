@@ -318,6 +318,12 @@ function ghStreamUpload(rid, name, totalLen, source) {
 }
 
 async function mergeVideo(id) {
+  /* MERGING DISABLED for stability: the free instance's 512MB RAM cannot
+     reliably stream-merge big videos — it OOMs and crash-loops the whole
+     API. Multi-part videos play fine through the proxy. Already-merged
+     videos keep their direct-CDN speed. */
+  if (process.env.MERGE_ENABLED !== '1') return;
+
   const r = await q('select video_path, parts, sizes, store, merge_state from videos where id = $1', [id]);
   if (!r.rows.length) return;
   const row = r.rows[0];
