@@ -848,36 +848,27 @@
 
       UPLOADING = true;
       try {
-        const uid = (crypto.randomUUID ? crypto.randomUUID() : 'u' + Date.now() + Math.random().toString(36).slice(2));
+        /* RESUMABLE publishing: remember finished segments for this exact file
+           → if anything fails, pressing Publish again continues where it stopped */
+        const sig = 'yv_up_' + (file.name || 'v') + '_' + file.size + '_' + (file.lastModified || 0);
+        let saved = null;
+        try { saved = JSON.parse(localStorage.getItem(sig) || 'null'); } catch (e) {}
+        if (!saved || saved.size !== file.size) saved = null;
+        const uid = (saved && saved.uid) || (crypto.randomUUID ? crypto.randomUUID() : 'u' + Date.now() + Math.random().toString(36).slice(2));
+        const doneSet = new Set(saved ? (saved.done || []) : []);
+        const saveUp = () => { try { localStorage.setItem(sig, JSON.stringify({ uid, size: file.size, done: [...doneSet] })); } catch (e) {} };
+
         const CHUNK = YV.PART_MB * 1024 * 1024;
         const segCount = Math.max(1, Math.min(YV.MAX_PARTS, Math.ceil(file.size / CHUNK)));
         const total = file.size;
-        let sent = 0;
 
-        /* one segment with auto-retry (segments are idempotent) */
-        const sendSeg = async (i, blob, attempt) => {
-          const fd = new FormData();
-          fd.append('video', blob, (file.name || 'video') + '.part' + i);
-          fd.append('index', String(i));
-          try {
-            await xhrSend('POST', '/api/videos/' + uid + '/segment', fd, {}, loaded => {
-              setProg('📡 Uploading segment ' + (i + 1) + '/' + segCount + ' — ' + Math.floor(((sent + loaded) / total) * 100) + '%',
-                (sent + loaded) / total);
-            });
-          } catch (e) {
-            if (attempt < 3) {
-              setProg('⚠️ Segment ' + (i + 1) + ' hiccup — retrying (' + attempt + '/2)…', sent / total);
-              await new Promise(r => setTimeout(r, 2500));
-              return sendSeg(i, blob, attempt + 1);
-            }
-            throw e;
-          }
-        };
+        if (doneSet.size) setProg('↩️ Resuming — ' + doneSet.size + '/' + segCount + ' segments already uploaded', doneSet.size / segCount);
 
-        /* upload segments in PARALLEL (2 at a time) with aggregated progress */
+        /* upload segments in PARALLEL (4 streams) with aggregated progress + auto-retry */
         const progLoaded = {};
         let sendIdx = 0;
         let sentDone = 0;
+        [...doneSet].forEach(i => { sentDone += Math.min(CHUNK, total - i * CHUNK); });
         const pctOf = () => {
           let b = sentDone;
           for (const k in progLoaded) b += progLoaded[k];
@@ -894,11 +885,13 @@
             });
             delete progLoaded[i];
             sentDone += blob.size;
+            doneSet.add(i);
+            saveUp();
             setProg('📡 Uploading — ' + Math.floor(pctOf() * 100) + '%', pctOf());
           } catch (e) {
-            if (attempt < 3) {
-              setProg('⚠️ Segment hiccup — retrying (' + attempt + '/2)…', pctOf());
-              await new Promise(r => setTimeout(r, 2500));
+            if (attempt < 5) {
+              setProg('⚠️ Segment hiccup — retrying (' + attempt + '/4)…', pctOf());
+              await new Promise(r => setTimeout(r, 3000));
               return sendSegP(i, blob, attempt + 1);
             }
             throw e;
@@ -907,11 +900,12 @@
         const worker = async () => {
           while (sendIdx < segCount) {
             const i = sendIdx++;
+            if (doneSet.has(i)) continue; // already uploaded in a previous attempt
             const blob = file.slice(i * CHUNK, Math.min((i + 1) * CHUNK, total));
             await sendSegP(i, blob, 1);
           }
         };
-        await Promise.all([worker(), worker(), worker()]);
+        await Promise.all([worker(), worker(), worker(), worker()]);
 
         setProg('⚡ Finalizing…', 1);
         const res = await api('/api/videos/complete', {
@@ -929,14 +923,15 @@
             thumb: thumbData || null,
           }),
         });
+        try { localStorage.removeItem(sig); } catch (e) {}
         if (res.del_key) S.myDelKeys[res.id] = res.del_key;
         YV.store.save();
         await loadVideos();
         toast('Published! Everyone can see it now', '🎉');
         location.hash = '#/watch/' + res.id;
       } catch (ex) {
-        err('⚠️ ' + (ex.message || 'Upload failed') + ' — try again (server waking up?)');
-        setProg('Upload failed', 0);
+        err('⚠️ ' + (ex.message || 'Upload failed') + ' — progress is SAVED: press Publish again to resume');
+        setProg('⏸ Paused — progress saved. Press Publish to resume', null);
         publish.disabled = false; publish.textContent = '🚀 Publish';
       } finally {
         UPLOADING = false;
