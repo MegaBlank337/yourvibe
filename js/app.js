@@ -951,7 +951,9 @@
             await sendSegP(i, blob, 1, 1);
           }
         };
-        await Promise.all([worker(), worker(), worker()]);
+        /* 6 parallel lanes: saturates the uplink without blowing the
+           free server's RAM (more would OOM it, all-at-once = crash) */
+        await Promise.all([worker(), worker(), worker(), worker(), worker(), worker()]);
 
         setProg('⚡ Finalizing…', 1);
         const res = await api('/api/videos/complete', {
