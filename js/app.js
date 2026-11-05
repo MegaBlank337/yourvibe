@@ -84,7 +84,7 @@
   }
 
   function feedSig() {
-    return VIDEOS.length + '|' + VIDEOS.map(x => x.id + ':' + (x.views || 0) + ':' + (x.likes || 0)).join(',').length
+    return VIDEOS.length + '|' + VIDEOS.map(x => x.id + ':' + (x.views || 0) + ':' + (x.likes || 0) + ':' + (x.parts || 1) + ':' + (x.video_url || '').length).join(',').length
       + '|' + Object.keys(CREATORS).map(k => k + CREATORS[k]).join('').length
       + '|' + Object.keys(AVATARS).length;
   }
