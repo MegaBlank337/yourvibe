@@ -912,7 +912,10 @@
           for (const k in progLoaded) b += progLoaded[k];
           return Math.min(1, b / total);
         };
-        const sendSegP = async (i, blob, attempt) => {
+        /* self-healing segment upload: 8 attempts with growing pauses,
+           then auto-cooldown rounds — hiccups are recovered invisibly */
+        const RETRY_DELAYS = [2000, 3000, 5000, 8000, 13000, 21000, 34000, 34000];
+        const sendSegP = async (i, blob, round, attempt) => {
           const fd = new FormData();
           fd.append('video', blob, (file.name || 'video') + '.part' + i);
           fd.append('index', String(i));
@@ -927,10 +930,15 @@
             saveUp();
             setProg('📡 Uploading — ' + Math.floor(pctOf() * 100) + '%', pctOf());
           } catch (e) {
-            if (attempt < 5) {
-              setProg('⚠️ Segment hiccup — retrying (' + attempt + '/4)…', pctOf());
-              await new Promise(r => setTimeout(r, 3000));
-              return sendSegP(i, blob, attempt + 1);
+            if (attempt <= RETRY_DELAYS.length) {
+              if (attempt >= 3) setProg('⚠️ Weak connection — auto-recovering (' + attempt + '/8)…', pctOf());
+              await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt - 1] || 30000));
+              return sendSegP(i, blob, round, attempt + 1);
+            }
+            if (round < 3) {
+              setProg('⏳ Connection trouble — auto-continuing in 30s…', pctOf());
+              await new Promise(r => setTimeout(r, 30000));
+              return sendSegP(i, blob, round + 1, 1);
             }
             throw e;
           }
@@ -940,10 +948,10 @@
             const i = sendIdx++;
             if (doneSet.has(i)) continue; // already uploaded in a previous attempt
             const blob = file.slice(i * CHUNK, Math.min((i + 1) * CHUNK, total));
-            await sendSegP(i, blob, 1);
+            await sendSegP(i, blob, 1, 1);
           }
         };
-        await Promise.all([worker(), worker(), worker(), worker()]);
+        await Promise.all([worker(), worker(), worker()]);
 
         setProg('⚡ Finalizing…', 1);
         const res = await api('/api/videos/complete', {
