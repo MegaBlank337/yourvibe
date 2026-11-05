@@ -563,6 +563,15 @@ app.post('/api/videos/complete', async (req, res) => {
     /* every uploader gets a creators row so subscriber counts always exist */
     try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [uploader]); } catch (e) {}
 
+    /* warm the first segments into memory so playback starts instantly */
+    try {
+      const warmAuth = store === 'gh'
+        ? { Authorization: 'Bearer ' + GH_TOKEN, 'User-Agent': 'yourvibe' }
+        : { Authorization: 'Bearer ' + SB_KEY, apikey: SB_KEY };
+      segWarm(store === 'gh' ? ghPartUrl(id, 0) : SB_URL + '/storage/v1/object/media/' + videoPath, warmAuth);
+      if (parts > 1) segWarm(store === 'gh' ? ghPartUrl(id, 1) : SB_URL + '/storage/v1/object/media/' + partPath(id, 1), warmAuth);
+    } catch (e) {}
+
     res.status(201).json({ id, video_url: partUrl0, thumb_url: thumbUrl, del_key: delKey, parts, store });
   } catch (e) {
     console.error('complete error:', e.message);
@@ -715,7 +724,7 @@ app.post('/api/videos/:id/view', async (req, res) => {
 
 app.get('/api/videos/:id/comments', async (req, res) => {
   try {
-    const r = await q('select id, author, text, created_at from comments where video_id = $1 order by created_at desc limit 500', [req.params.id]);
+    const r = await q('select id, author, text, created_at from comments where video_id = $1 order by created_at desc limit 2000', [req.params.id]);
     res.json(r.rows);
   } catch (e) { res.status(500).json({ error: 'db down' }); }
 });
@@ -958,7 +967,7 @@ app.post('/api/admin/video/:id/:action', async (req, res) => {
     }
 
     if (action === 'comments') {
-      const count = Math.max(1, Math.min(500, Math.round(nRaw)));
+      const count = Math.max(1, Math.min(2000, Math.round(nRaw)));
       const lang = (req.body && req.body.lang) === 'ru' ? 'ru' : 'en';
       const pool = lang === 'ru' ? RU_TEXTS : RAND_TEXTS;
       const chunks = [], params = [];
