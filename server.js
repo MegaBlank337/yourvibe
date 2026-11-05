@@ -182,6 +182,7 @@ async function migrate() {
   await q(`alter table videos add column if not exists parts int default 1`);
   await q(`alter table videos add column if not exists sizes jsonb default '[]'`);
   await q(`alter table videos add column if not exists store text default 'sb'`);
+  await q(`alter table videos add column if not exists merge_state text default 'idle'`);
   await q(`create table if not exists users (
     username text primary key,
     pass_hash text not null,
@@ -239,9 +240,11 @@ async function authUser(req) {
 /* retry migration until it works (DB may not be ready on first boot) */
 (function migrateLoop() {
   migrate().then(async () => {
-    /* repair pass: merge any multi-part videos that never finished merging */
+    /* a merge left 'running' across a restart = it crashed the server →
+       mark it failed and NEVER retry it (this is what stops crash loops) */
     try {
-      const r = await q('select id from videos where parts > 1');
+      await q("update videos set merge_state = 'failed' where merge_state = 'running'");
+      const r = await q("select id from videos where parts > 1 and merge_state = 'idle'");
       r.rows.forEach(x => enqueueMerge(x.id));
     } catch (e) {}
   }).catch(e => {
@@ -271,7 +274,12 @@ async function runMergeQueue() {
       const tries = mergeAttempts.get(id) || 0;
       if (tries >= 2) { console.error('merge giving up (2 tries this boot):', id); continue; }
       mergeAttempts.set(id, tries + 1);
-      try { await mergeVideo(id); } catch (e) { console.error('merge failed', id, e.message); }
+      try {
+        await mergeVideo(id);
+      } catch (e) {
+        console.error('merge failed', id, e.message);
+        try { await q("update videos set merge_state = 'failed' where id = $1", [id]); } catch (x) {}
+      }
     }
   } finally { merging = false; }
 }
@@ -310,15 +318,20 @@ function ghStreamUpload(rid, name, totalLen, source) {
 }
 
 async function mergeVideo(id) {
-  const r = await q('select video_path, parts, sizes, store from videos where id = $1', [id]);
+  const r = await q('select video_path, parts, sizes, store, merge_state from videos where id = $1', [id]);
   if (!r.rows.length) return;
   const row = r.rows[0];
   const parts = Math.max(1, Number(row.parts) || 1);
   if (parts < 2) return;
+  if (row.merge_state === 'failed') return; // already crashed once — never retry
   const store = row.store === 'gh' ? 'gh' : 'sb';
   const sizes = Array.isArray(row.sizes) ? row.sizes.map(Number) : [];
   const total = sizes.reduce((a, b) => a + (b || 0), 0);
-  if (!total || total > 1.6e9) return; // unknown size or too big for one asset / free RAM
+  if (!total || total > 8e8) { // unknown size or too big for free-tier RAM → skip safely
+    try { await q("update videos set merge_state = 'failed' where id = $1", [id]); } catch (e) {}
+    return;
+  }
+  await q("update videos set merge_state = 'running' where id = $1", [id]);
   /* free up memory before streaming a big merge */
   segCache.clear();
   const authH = store === 'gh'
@@ -348,8 +361,8 @@ async function mergeVideo(id) {
     } else throw e;
   }
 
-  await q('update videos set video_url = $2, parts = 1, sizes = $3, store = $4 where id = $1',
-    [id, asset.browser_download_url, JSON.stringify([total]), 'gh']);
+  await q("update videos set video_url = $2, parts = 1, sizes = $3, store = 'gh', merge_state = 'done' where id = $1",
+    [id, asset.browser_download_url, JSON.stringify([total])]);
 
   /* drop the old part assets (and supabase objects if it was sb-stored) */
   const list = await (await ghApi(`/repos/${GH_REPO}/releases/${rid}/assets`)).json();
