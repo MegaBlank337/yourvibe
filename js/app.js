@@ -44,9 +44,17 @@
   let CREATORS = {};   // { uploaderName: subscriberCount }
   let videosLoaded = false;
 
-  /* ONE round-trip boot (fast): feed + creators + avatars + announcement + account */
+  /* ONE round-trip boot (fast): feed + creators + avatars + announcement + account.
+     Falls back to the split endpoints if /api/boot hiccups. */
   async function loadBoot() {
-    const b = await api('/api/boot');
+    let b;
+    try {
+      b = await api('/api/boot');
+    } catch (e) {
+      const vids = await api('/api/videos');
+      const creators = await api('/api/creators').catch(() => ({}));
+      b = { videos: vids, creators: creators || {}, avatars: {}, announcement: null };
+    }
     VIDEOS = b.videos || [];
     CREATORS = b.creators || {};
     AVATARS = Object.assign({}, b.avatars || {});
@@ -100,12 +108,16 @@
       + '<button class="btn-neon" data-action="retry">↻ Try again</button></div>';
   }
 
-  /* ensure feed is loaded, render error/loading when needed; returns true when ready */
+  /* ensure feed is loaded; retry once silently before showing any error */
   async function ensureVideos() {
     if (videosLoaded) return true;
     main.innerHTML = loadingHTML();
-    try { await loadVideos(); main.innerHTML = ''; return true; }
-    catch (e) { main.innerHTML = apiErrHTML(); return false; }
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try { await loadVideos(); main.innerHTML = ''; return true; }
+      catch (e) { if (attempt === 1) await new Promise(r => setTimeout(r, 4000)); }
+    }
+    main.innerHTML = apiErrHTML();
+    return false;
   }
 
   /* ═══════════ helpers ═══════════ */
@@ -515,7 +527,7 @@
     if (!src) return '<div class="player error-box">⚠️ Video unavailable</div>';
     const vert = v.type === 'short';
     return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer">'
-      + '<video id="yvVideo" src="' + src + '" playsinline ' + (v.thumb_url ? 'poster="' + v.thumb_url + '" ' : '') + '></video>'
+      + '<video id="yvVideo" data-vid="' + v.id + '" src="' + src + '" playsinline ' + (v.thumb_url ? 'poster="' + v.thumb_url + '" ' : '') + '></video>'
       + '<div class="v-spin" id="yvSpin"><i></i></div>'
       + '<button class="big-play" id="yvBig" aria-label="Play">▶</button>'
       + '<div class="controls">'
@@ -606,7 +618,31 @@
 
     V.addEventListener('play', sync); V.addEventListener('pause', sync); V.addEventListener('volumechange', sync);
     V.addEventListener('timeupdate', () => { const d = V.duration || 0; setFill(d ? V.currentTime / d : 0); timeEl.textContent = fmt(V.currentTime) + ' / ' + fmt(d); });
-    V.addEventListener('error', () => {
+    let playerRecovered = false;
+    V.addEventListener('error', async () => {
+      P.querySelectorAll('.p-err').forEach(e => e.remove());
+      /* figure out WHY: deleted video vs transient hiccup */
+      try {
+        const head = await fetch(V.currentSrc, { method: 'HEAD' });
+        if (head.status === 404) {
+          /* video may have been deleted → refresh the feed and confirm */
+          try { await loadVideos(); } catch (e) {}
+          const still = byId(V.dataset.vid);
+          if (!still) {
+            P.insertAdjacentHTML('beforeend', '<div class="p-err">👻 This video was deleted</div>');
+            big.style.display = 'none';
+            return;
+          }
+        }
+      } catch (e) { /* HEAD failed too — treat as transient */ }
+      /* transient failure → one automatic recovery attempt */
+      if (!playerRecovered) {
+        playerRecovered = true;
+        toast('Playback hiccup — retrying…', '🔁');
+        await new Promise(r => setTimeout(r, 2500));
+        try { V.load(); V.play().catch(() => {}); } catch (e) {}
+        return;
+      }
       P.insertAdjacentHTML('beforeend', '<div class="p-err">⚠️ Playback failed — check your connection</div>');
       big.style.display = 'none';
     });
@@ -818,6 +854,7 @@
       return new Promise((resolve, reject) => {
         const x = new XMLHttpRequest();
         x.open(method, API_BASE + url);
+        x.timeout = 240000; // never let a hung request stall an upload worker
         for (const k in headers) x.setRequestHeader(k, headers[k]);
         x.upload.onprogress = e => { if (e.lengthComputable && onProgress) onProgress(e.loaded); };
         x.onload = () => {
@@ -829,6 +866,7 @@
           }
         };
         x.onerror = () => reject(new Error('network error'));
+        x.ontimeout = () => reject(new Error('request timed out — retrying'));
         x.send(body);
       });
     }
