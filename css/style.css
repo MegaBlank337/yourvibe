@@ -811,6 +811,41 @@ main > * { animation: fadeUp .38s ease both; }
 .ann-x:hover { color: #fff; text-shadow: 0 0 8px var(--pink); }
 body.has-ann main { padding-top: 138px; }
 
+/* ══════════ POLLS ══════════ */
+.poll-card {
+  border: 1px solid rgba(139, 92, 246, .4);
+  background: rgba(14, 18, 38, .7);
+  border-radius: var(--r);
+  padding: 18px 20px;
+  margin-bottom: 26px;
+  box-shadow: 0 0 20px rgba(139, 92, 246, .12);
+}
+.poll-card h3 { margin-bottom: 14px; font-size: 17px; }
+.poll-opt {
+  position: relative; overflow: hidden;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 11px 16px; margin-bottom: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(10, 12, 28, .7);
+  color: var(--txt); font-weight: 600; font-size: 15px; text-align: left;
+  transition: border-color .2s, box-shadow .2s;
+}
+.poll-opt:hover { border-color: rgba(0, 229, 255, .5); }
+.poll-opt.done { cursor: default; }
+.poll-opt.done.mine {
+  border-color: rgba(255, 43, 214, .65);
+  box-shadow: 0 0 14px rgba(255, 43, 214, .2);
+}
+.po-bar {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  background: linear-gradient(90deg, rgba(255, 43, 214, .22), rgba(0, 229, 255, .22));
+  transition: width .5s ease;
+}
+.po-t, .po-pct { position: relative; z-index: 1; }
+.po-pct { color: var(--cyan); font-family: 'Orbitron', sans-serif; font-size: 12px; }
+.poll-total { color: var(--mut); font-size: 13.5px; font-weight: 600; margin-top: 4px; }
+
 /* ══════════ AUTH ══════════ */
 .signin-btn {
   font-family: 'Orbitron', sans-serif; font-size: 11.5px; font-weight: 700; letter-spacing: 1px;
