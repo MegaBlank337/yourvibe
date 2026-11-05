@@ -19,7 +19,7 @@
    ═══════════════════════════════════════════════════════ */
 const express = require('express');
 const multer = require('multer');
-const { Client } = require('pg');
+const { Client, Pool } = require('pg');
 const crypto = require('crypto');
 const path = require('path');
 const dns = require('dns');
@@ -99,9 +99,9 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '1mb' }));
 
 /* ── Postgres (Supabase) with auto-reconnect ── */
-let pg = null;
 let migrated = false;
 let DB_CFG = null;
+let pgPool = null;
 
 /* Build a connection config with an IPv4 address (Render free has no IPv6) */
 async function dbConfig() {
@@ -124,18 +124,25 @@ async function dbConfig() {
   return DB_CFG;
 }
 
+/* Postgres via a small pool (safe for concurrent requests + merge worker) */
+async function getPool() {
+  if (pgPool) return pgPool;
+  const cfg = await dbConfig();
+  pgPool = new Pool({
+    host: cfg.host, port: cfg.port, user: cfg.user, password: cfg.password,
+    database: cfg.database, ssl: cfg.ssl,
+    max: 4, idleTimeoutMillis: 30000,
+  });
+  pgPool.on('error', () => {});
+  return pgPool;
+}
+
 async function q(sql, params) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      if (!pg || pg._ended) {
-        pg = new Client(await dbConfig());
-        pg.on('error', () => { try { pg.end(); } catch (e) {} pg = null; });
-        await pg.connect();
-      }
-      return await pg.query(sql, params);
+      const pool = await getPool();
+      return await pool.query(sql, params);
     } catch (e) {
-      try { if (pg) pg.end(); } catch (e2) {}
-      pg = null;
       if (attempt === 3) throw e;
       await new Promise(r => setTimeout(r, 350));
     }
@@ -248,6 +255,7 @@ async function authUser(req) {
    instant load/seek). Runs one at a time, streams (no big RAM use). ── */
 const mergeQueue = [];
 let merging = false;
+const mergeAttempts = new Map(); // id → attempts this boot (stops crash loops)
 
 function enqueueMerge(id) {
   if (!mergeQueue.includes(id)) mergeQueue.push(id);
@@ -260,6 +268,9 @@ async function runMergeQueue() {
   try {
     while (mergeQueue.length) {
       const id = mergeQueue.shift();
+      const tries = mergeAttempts.get(id) || 0;
+      if (tries >= 2) { console.error('merge giving up (2 tries this boot):', id); continue; }
+      mergeAttempts.set(id, tries + 1);
       try { await mergeVideo(id); } catch (e) { console.error('merge failed', id, e.message); }
     }
   } finally { merging = false; }
@@ -307,7 +318,9 @@ async function mergeVideo(id) {
   const store = row.store === 'gh' ? 'gh' : 'sb';
   const sizes = Array.isArray(row.sizes) ? row.sizes.map(Number) : [];
   const total = sizes.reduce((a, b) => a + (b || 0), 0);
-  if (!total || total > 1.9e9) return; // unknown size or too big for one asset
+  if (!total || total > 1.6e9) return; // unknown size or too big for one asset / free RAM
+  /* free up memory before streaming a big merge */
+  segCache.clear();
   const authH = store === 'gh'
     ? { Authorization: 'Bearer ' + GH_TOKEN, 'User-Agent': 'yourvibe' }
     : { Authorization: 'Bearer ' + SB_KEY, apikey: SB_KEY };
@@ -349,6 +362,7 @@ async function mergeVideo(id) {
     }
   }
   metaCache.delete(id);
+  segCache.clear();
   console.log('✅ merged video ' + id + ' → direct CDN (' + Math.round(total / 1048576) + ' MB)');
 }
 
