@@ -635,11 +635,17 @@ async function streamOut(req, res) {
     let sizes = [];
     if (Array.isArray(row.sizes)) sizes = row.sizes.map(Number);
     else { try { sizes = JSON.parse(row.sizes || '[]').map(Number); } catch (e) { sizes = []; } }
-    const paths = [];
+    const paths = [];   // server-side fetch URLs (authenticated)
+    const pubPaths = []; // PUBLIC urls for redirecting viewers (CDN direct)
     for (let i = 0; i < parts; i++) {
-      paths.push(store === 'gh'
-        ? ghPartUrl(req.params.id, i)
-        : SB_URL + '/storage/v1/object/media/' + row.video_path.replace(/part\d+\.mp4$/, 'part' + i + '.mp4'));
+      const rel = row.video_path.replace(/part\d+\.mp4$/, 'part' + i + '.mp4');
+      if (store === 'gh') {
+        paths.push(ghPartUrl(req.params.id, i));
+        pubPaths.push(ghPartUrl(req.params.id, i)); // GitHub release URLs are public
+      } else {
+        paths.push(SB_URL + '/storage/v1/object/media/' + rel);
+        pubPaths.push(SB_URL + '/storage/v1/object/public/media/' + rel); // PUBLIC url
+      }
     }
 
     const authH = store === 'gh'
@@ -681,8 +687,8 @@ async function streamOut(req, res) {
 
     /* chunk fits inside one segment → redirect straight to the CDN
        (browser re-sends the Range there; data never passes through us) */
-    if (end <= segEnd) {
-      return res.redirect(302, paths[segIdx]);
+    if (end <= segEnd && pubPaths[segIdx]) {
+      return res.redirect(302, pubPaths[segIdx]);
     }
 
     /* chunk spans segments → serve only up to the segment boundary;
