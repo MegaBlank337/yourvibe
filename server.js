@@ -23,6 +23,7 @@ const { Client } = require('pg');
 const crypto = require('crypto');
 const path = require('path');
 const dns = require('dns');
+const https = require('https');
 
 /* Supabase db.* hosts resolve to IPv6 first (or only), but Render free
    instances have no IPv6 egress — force IPv4. */
@@ -53,7 +54,8 @@ async function ghApi(path, opts = {}) {
   }));
 }
 
-/* get-or-create the release that holds one video's segments */
+/* get-or-create the release that holds one video's segments (race-safe:
+   parallel segment workers may create the same release simultaneously) */
 async function ghReleaseId(tag) {
   let r = await ghApi(`/repos/${GH_REPO}/releases/tags/${tag}`);
   if (r.status === 200) return (await r.json()).id;
@@ -62,8 +64,12 @@ async function ghReleaseId(tag) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ tag_name: tag, name: tag }),
   });
-  if (!r.ok) throw new Error('release create failed (' + r.status + ') ' + (await r.text()).slice(0, 120));
-  return (await r.json()).id;
+  if (r.status === 201) return (await r.json()).id;
+  if (r.status === 422) { // another worker created it first — look it up
+    const g = await ghApi(`/repos/${GH_REPO}/releases/tags/${tag}`);
+    if (g.status === 200) return (await g.json()).id;
+  }
+  throw new Error('release create failed (' + r.status + ') ' + (await r.text()).slice(0, 120));
 }
 
 /* upload one segment as a release asset (replaces on name conflict) */
@@ -225,11 +231,126 @@ async function authUser(req) {
 
 /* retry migration until it works (DB may not be ready on first boot) */
 (function migrateLoop() {
-  migrate().catch(e => {
+  migrate().then(async () => {
+    /* repair pass: merge any multi-part videos that never finished merging */
+    try {
+      const r = await q('select id from videos where parts > 1');
+      r.rows.forEach(x => enqueueMerge(x.id));
+    } catch (e) {}
+  }).catch(e => {
     console.error('migration failed, retrying in 15s:', e.message);
     setTimeout(migrateLoop, 15000);
   });
 })();
+
+/* ── background merger: combine segments into ONE GitHub asset.
+   After merging, the video plays DIRECTLY from GitHub's CDN (no proxy,
+   instant load/seek). Runs one at a time, streams (no big RAM use). ── */
+const mergeQueue = [];
+let merging = false;
+
+function enqueueMerge(id) {
+  if (!mergeQueue.includes(id)) mergeQueue.push(id);
+  runMergeQueue();
+}
+
+async function runMergeQueue() {
+  if (merging) return;
+  merging = true;
+  try {
+    while (mergeQueue.length) {
+      const id = mergeQueue.shift();
+      try { await mergeVideo(id); } catch (e) { console.error('merge failed', id, e.message); }
+    }
+  } finally { merging = false; }
+}
+
+/* stream an asset upload with a known total length (chunked from an async generator) */
+function ghStreamUpload(rid, name, totalLen, source) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'uploads.github.com',
+      path: `/repos/${GH_REPO}/releases/${rid}/assets?name=${encodeURIComponent(name)}`,
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + GH_TOKEN,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'yourvibe',
+        'Content-Type': 'video/mp4',
+        'Content-Length': String(totalLen),
+      },
+    }, res => {
+      let data = '';
+      res.on('data', c => { data += c; });
+      res.on('end', () => {
+        if (res.statusCode === 201) {
+          try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+        } else reject(new Error('asset upload ' + res.statusCode + ' ' + data.slice(0, 120)));
+      });
+    });
+    req.on('error', reject);
+    (async () => {
+      for await (const chunk of source) {
+        if (!req.write(chunk)) await new Promise(w => req.once('drain', w));
+      }
+      req.end();
+    })().catch(reject);
+  });
+}
+
+async function mergeVideo(id) {
+  const r = await q('select video_path, parts, sizes, store from videos where id = $1', [id]);
+  if (!r.rows.length) return;
+  const row = r.rows[0];
+  const parts = Math.max(1, Number(row.parts) || 1);
+  if (parts < 2) return;
+  const store = row.store === 'gh' ? 'gh' : 'sb';
+  const sizes = Array.isArray(row.sizes) ? row.sizes.map(Number) : [];
+  const total = sizes.reduce((a, b) => a + (b || 0), 0);
+  if (!total || total > 1.9e9) return; // unknown size or too big for one asset
+  const authH = store === 'gh'
+    ? { Authorization: 'Bearer ' + GH_TOKEN, 'User-Agent': 'yourvibe' }
+    : { Authorization: 'Bearer ' + SB_KEY, apikey: SB_KEY };
+  const rid = await ghReleaseId('v-' + id);
+
+  async function* chunks() {
+    for (let i = 0; i < parts; i++) {
+      const url = store === 'gh'
+        ? ghPartUrl(id, i)
+        : SB_URL + '/storage/v1/object/media/' + row.video_path.replace(/part\d+\.mp4$/, 'part' + i + '.mp4');
+      const resp = await fetch(url, { headers: authH });
+      if (!resp.ok) throw new Error('part fetch failed ' + resp.status);
+      for await (const c of resp.body) yield c;
+    }
+  }
+
+  let asset;
+  try {
+    asset = await ghStreamUpload(rid, 'full.mp4', total, chunks());
+  } catch (e) {
+    if (String(e.message).includes('422')) { // name exists → delete and retry once
+      const list = await (await ghApi(`/repos/${GH_REPO}/releases/${rid}/assets`)).json();
+      for (const a of (list || [])) if (a.name === 'full.mp4') await ghApi(`/repos/${GH_REPO}/releases/assets/${a.id}`, { method: 'DELETE' });
+      asset = await ghStreamUpload(rid, 'full.mp4', total, chunks());
+    } else throw e;
+  }
+
+  await q('update videos set video_url = $2, parts = 1, sizes = $3, store = $4 where id = $1',
+    [id, asset.browser_download_url, JSON.stringify([total]), 'gh']);
+
+  /* drop the old part assets (and supabase objects if it was sb-stored) */
+  const list = await (await ghApi(`/repos/${GH_REPO}/releases/${rid}/assets`)).json();
+  for (const a of (list || [])) {
+    if (a.name && a.name.startsWith('part')) ghApi(`/repos/${GH_REPO}/releases/assets/${a.id}`, { method: 'DELETE' }).catch(() => {});
+  }
+  if (store === 'sb') {
+    for (let i = 0; i < parts; i++) {
+      sbDelete(row.video_path.replace(/part\d+\.mp4$/, 'part' + i + '.mp4')).catch(() => {});
+    }
+  }
+  metaCache.delete(id);
+  console.log('✅ merged video ' + id + ' → direct CDN (' + Math.round(total / 1048576) + ' MB)');
+}
 
 /* ── Supabase Storage upload ── */
 async function sbPut(objPath, buffer, contentType) {
@@ -531,10 +652,11 @@ app.post('/api/videos/complete', async (req, res) => {
     const store = ghMode() ? 'gh' : 'sb';
 
     const partUrl0 = store === 'gh' ? ghPartUrl(id, 0) : pubUrl(partPath(id, 0));
-    const sizes = [];
+    const sizePs = [];
     for (let i = 0; i < parts; i++) {
-      sizes.push(await partSize(store === 'gh' ? ghPartUrl(id, i) : SB_URL + '/storage/v1/object/media/' + partPath(id, i), store));
+      sizePs.push(partSize(store === 'gh' ? ghPartUrl(id, i) : SB_URL + '/storage/v1/object/media/' + partPath(id, i), store));
     }
+    const sizes = await Promise.all(sizePs);
     if (!sizes[0]) return res.status(400).json({ error: 'segments missing — upload failed' });
 
     let thumbPath = null, thumbUrl = null;
@@ -571,6 +693,11 @@ app.post('/api/videos/complete', async (req, res) => {
       segWarm(store === 'gh' ? ghPartUrl(id, 0) : SB_URL + '/storage/v1/object/media/' + videoPath, warmAuth);
       if (parts > 1) segWarm(store === 'gh' ? ghPartUrl(id, 1) : SB_URL + '/storage/v1/object/media/' + partPath(id, 1), warmAuth);
     } catch (e) {}
+
+    /* merge multi-part videos into ONE CDN file in the BACKGROUND
+       (publish finishes right after the upload; playback becomes
+       direct-from-CDN a couple of minutes later, automatically) */
+    if (parts > 1) enqueueMerge(id);
 
     res.status(201).json({ id, video_url: partUrl0, thumb_url: thumbUrl, del_key: delKey, parts, store });
   } catch (e) {
