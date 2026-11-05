@@ -53,6 +53,7 @@
     CREATORS = creators || {};
     videosLoaded = true;
     saveFeedCache();
+    loadAvatars(VIDEOS.map(v => v.uploader)); // real icons for account holders
   }
 
   /* ── instant-load feed cache (stale-while-revalidate) ── */
@@ -151,6 +152,23 @@
   function hashHue(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
   function palFor(name) { return AV_PALETTES[hashHue(name || '?') % AV_PALETTES.length]; }
 
+  /* account avatars (server-side) → real icons instead of letters */
+  let AVATARS = {}; // lowercase name -> dataURL
+
+  async function loadAvatars(names) {
+    const uniq = [];
+    const seen = {};
+    (names || []).forEach(n => {
+      const k = String(n || '').toLowerCase();
+      if (k && !seen[k] && !AVATARS[k]) { seen[k] = 1; uniq.push(k); }
+    });
+    if (!uniq.length) return;
+    try {
+      const m = await api('/api/avatars?names=' + encodeURIComponent(uniq.slice(0, 60).join(',')));
+      Object.assign(AVATARS, m || {});
+    } catch (e) {}
+  }
+
   /* uploader pseudo-channel of a video */
   function upOf(v) {
     const isMe = v.uploader === S.myChannel.name;
@@ -186,6 +204,8 @@
       ch = { name: S.myChannel.name, colors: S.myChannel.colors };
     }
     const p = (ch && ch.colors) ? ch.colors : palFor(ch && ch.name);
+    const accAvatar = AVATARS[((ch && ch.name) || '').toLowerCase()];
+    if (accAvatar) return '<span class="av av-img" style="width:' + size + 'px;height:' + size + 'px"><img src="' + accAvatar + '" alt=""></span>';
     const letter = ((ch && ch.name) || '?').trim().charAt(0).toUpperCase();
     return '<span class="av" style="width:' + size + 'px;height:' + size + 'px;--c1:' + p[0] + ';--c2:' + p[1] + '">' + letter + '</span>';
   }
@@ -451,6 +471,7 @@
   async function commentsHTML(v) {
     let list = [];
     try { list = await api('/api/videos/' + v.id + '/comments'); } catch (e) { list = []; }
+    await loadAvatars(list.map(c => c.author)); // real icons in comments too
     return '<section class="comments" id="comments">'
       + '<h2 class="c-head" id="cHead">' + fmtNum(list.length) + ' Comments</h2>'
       + '<form class="c-input" data-form="comment" data-id="' + v.id + '">'
@@ -913,6 +934,14 @@
       S.myChannel.banner = banData;
       YV.store.save();
       renderMe();
+      /* logged in → save avatar/banner to the account (works on every device) */
+      if (S.auth && S.auth.token) {
+        api('/api/auth/profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ avatar: avaData, banner: banData })
+        }).then(() => { AVATARS[S.auth.username.toLowerCase()] = avaData; navigate(); }).catch(() => {});
+      }
       toast('Channel updated', '✨');
       location.hash = '#/channel';
     };
@@ -1029,11 +1058,11 @@
     }
   }
 
-  /* move guest uploads from this browser into the logged-in account */
+  /* move guest uploads from this browser into the logged-in account
+     (also merges same-name creators: "Vadim Playground" ≈ vadim_playground) */
   async function claimMyVideos(silent) {
     if (!S.auth || !S.auth.token) return 0;
     const ids = Object.keys(S.myDelKeys || {});
-    if (!ids.length) return 0;
     try {
       const r = await api('/api/auth/claim', {
         method: 'POST',
@@ -1042,11 +1071,23 @@
       });
       if (r.moved > 0) {
         videosLoaded = false;
-        toast('Moved ' + r.moved + ' guest video' + (r.moved === 1 ? '' : 's') + ' to @' + S.auth.username, '📦');
+        toast('Moved ' + r.moved + ' video' + (r.moved === 1 ? '' : 's') + ' to @' + S.auth.username, '📦');
         if (!silent) { await loadVideos(); navigate(); }
       }
       return r.moved || 0;
     } catch (e) { return 0; }
+  }
+
+  /* pull account avatar/banner so your icon follows you to every device */
+  async function syncAccountProfile() {
+    if (!S.auth || !S.auth.token) return;
+    try {
+      const me = await api('/api/auth/me');
+      if (me.avatar) S.myChannel.avatar = me.avatar;
+      if (me.banner) S.myChannel.banner = me.banner;
+      YV.store.save();
+      renderMe();
+    } catch (e) {}
   }
 
   function renderMe() {
@@ -1113,6 +1154,7 @@
         YV.store.save();
         renderMe();
         toast(mode === 'login' ? 'Welcome back, @' + r.username + '!' : 'Account created — welcome, @' + r.username + '!', '✨');
+        await syncAccountProfile();
         await claimMyVideos();
         location.hash = '#/upload';
       } catch (ex) {
@@ -1406,6 +1448,7 @@
   const hydrated = hydrateFeedCache();
   navigate();
   loadAnnouncement();
+  syncAccountProfile();
   if (hydrated) {
     const sig = feedSig();
     loadVideos().then(() => {
