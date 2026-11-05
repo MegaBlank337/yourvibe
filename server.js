@@ -670,19 +670,34 @@ async function streamOut(req, res) {
     if (end >= total) end = total - 1;
     if (start > end || start >= total) { res.status(416).setHeader('Content-Range', 'bytes */' + total).end(); return; }
 
+    /* find the segment that contains `start` */
+    let segIdx = 0, segStart = 0, segEnd = -1, offset = 0;
+    for (let i = 0; i < paths.length; i++) {
+      const size = sizes[i] || 0;
+      const s0 = offset, s1 = offset + size - 1;
+      offset += size;
+      if (start >= s0 && start <= s1) { segIdx = i; segStart = s0; segEnd = s1; break; }
+    }
+
+    /* chunk fits inside one segment → redirect straight to the CDN
+       (browser re-sends the Range there; data never passes through us) */
+    if (end <= segEnd) {
+      return res.redirect(302, paths[segIdx]);
+    }
+
+    /* chunk spans segments → serve only up to the segment boundary;
+       the browser will request the rest piecewise (each then redirect-hits the CDN) */
+    end = segEnd;
+
     res.status(206);
     res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Content-Length', String(end - start + 1));
 
-    let offset = 0;
     let cursor = start;
-    for (let i = 0; i < paths.length && cursor <= end; i++) {
+    for (let i = segIdx; i < paths.length && cursor <= end; i++) {
       const size = sizes[i] || 0;
-      const segStart = offset, segEnd = offset + size - 1;
-      offset += size;
-      if (segEnd < cursor) continue;
       const from = cursor - segStart;
       const to = end - segStart;
 
@@ -695,6 +710,8 @@ async function streamOut(req, res) {
       });
       if (rr.ok) await pipe(rr.body);
       cursor = segEnd + 1;
+      segStart += size;
+      segEnd = segStart + (sizes[i + 1] || 0) - 1;
     }
     res.end();
   } catch (e) {
