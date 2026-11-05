@@ -911,7 +911,7 @@
             await sendSegP(i, blob, 1);
           }
         };
-        await Promise.all([worker(), worker()]);
+        await Promise.all([worker(), worker(), worker()]);
 
         setProg('⚡ Finalizing…', 1);
         const res = await api('/api/videos/complete', {
