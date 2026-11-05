@@ -609,7 +609,7 @@ app.post('/api/videos/:id/segment', uploadSeg.single('video'), async (req, res) 
     if (!f) return res.status(400).json({ error: 'no segment file' });
     const id = req.params.id;
     if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'bad id' });
-    const idx = Math.max(0, Math.min(63, parseInt((req.body && req.body.index) || '0', 10) || 0));
+    const idx = Math.max(0, Math.min(95, parseInt((req.body && req.body.index) || '0', 10) || 0));
 
     if (ghMode()) {
       const asset = await ghPutAsset('v-' + id, 'part' + idx + '.mp4', f.buffer, f.mimetype || 'video/mp4');
@@ -625,8 +625,9 @@ app.post('/api/videos/:id/segment', uploadSeg.single('video'), async (req, res) 
   }
 });
 
-/* size of a remote part (Supabase object or GitHub asset) */
-async function partSize(url, store) {
+/* size of a remote part (Supabase object or GitHub asset) with retries
+   (freshly-uploaded GitHub assets can take a few seconds to appear) */
+async function partSizeOnce(url, store) {
   const authHeaders = store === 'gh' && GH_TOKEN
     ? { Authorization: 'Bearer ' + GH_TOKEN, 'User-Agent': 'yourvibe' }
     : { Authorization: 'Bearer ' + SB_KEY, apikey: SB_KEY };
@@ -643,12 +644,22 @@ async function partSize(url, store) {
   return 0;
 }
 
+async function partSize(url, store, tries) {
+  tries = tries || 3;
+  for (let t = 1; t <= tries; t++) {
+    const v = await partSizeOnce(url, store);
+    if (v > 0) return v;
+    if (t < tries) await new Promise(r => setTimeout(r, 1300));
+  }
+  return 0;
+}
+
 app.post('/api/videos/complete', async (req, res) => {
   try {
     const b = req.body || {};
     const id = String(b.id || '');
     if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'bad id' });
-    const parts = Math.max(1, Math.min(64, parseInt(b.parts, 10) || 1));
+    const parts = Math.max(1, Math.min(96, parseInt(b.parts, 10) || 1));
     const store = ghMode() ? 'gh' : 'sb';
 
     const partUrl0 = store === 'gh' ? ghPartUrl(id, 0) : pubUrl(partPath(id, 0));
@@ -656,8 +667,19 @@ app.post('/api/videos/complete', async (req, res) => {
     for (let i = 0; i < parts; i++) {
       sizePs.push(partSize(store === 'gh' ? ghPartUrl(id, i) : SB_URL + '/storage/v1/object/media/' + partPath(id, i), store));
     }
-    const sizes = await Promise.all(sizePs);
-    if (!sizes[0]) return res.status(400).json({ error: 'segments missing — upload failed' });
+    let sizes = await Promise.all(sizePs);
+    /* freshly-uploaded segments can take a moment to appear — wait for stragglers */
+    for (let round = 0; round < 12 && sizes.some(s => !s); round++) {
+      await new Promise(r => setTimeout(r, 2500));
+      const missing = [];
+      sizes.forEach((s, i) => {
+        if (!s) missing.push(partSize(store === 'gh' ? ghPartUrl(id, i) : SB_URL + '/storage/v1/object/media/' + partPath(id, i), store, 1).then(v => { if (v) sizes[i] = v; }));
+      });
+      await Promise.all(missing);
+    }
+    if (!sizes[0] || sizes.some(s => !s)) {
+      return res.status(400).json({ error: 'segments still processing — press Publish again in a minute (your upload progress is saved)' });
+    }
 
     let thumbPath = null, thumbUrl = null;
     const thumb = String(b.thumb || '');
