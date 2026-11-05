@@ -175,6 +175,8 @@ async function migrate() {
     token text,
     created_at timestamptz default now()
   )`);
+  await q(`alter table users add column if not exists avatar text`);
+  await q(`alter table users add column if not exists banner text`);
   await q(`create table if not exists announcements (
     id bigserial primary key,
     text text not null,
@@ -277,7 +279,37 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/auth/me', async (req, res) => {
   const username = await authUser(req);
   if (!username) return res.status(401).json({ error: 'not logged in' });
-  res.json({ username });
+  try {
+    const r = await q('select username, avatar, banner from users where username = $1', [username]);
+    const u = r.rows[0] || {};
+    res.json({ username, avatar: u.avatar || null, banner: u.banner || null });
+  } catch (e) { res.json({ username }); }
+});
+
+/* save account avatar/banner (synced across devices) */
+app.post('/api/auth/profile', async (req, res) => {
+  const username = await authUser(req);
+  if (!username) return res.status(401).json({ error: 'not logged in' });
+  const avatar = String((req.body && req.body.avatar) || '');
+  const banner = String((req.body && req.body.banner) || '');
+  if (avatar && !(avatar.startsWith('data:image/') && avatar.length < 2000000)) return res.status(400).json({ error: 'bad avatar' });
+  if (banner && !(banner.startsWith('data:image/') && banner.length < 2000000)) return res.status(400).json({ error: 'bad banner' });
+  try {
+    await q('update users set avatar = $2, banner = $3 where username = $1', [username, avatar || null, banner || null]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+/* batch avatar lookup for comments/feed */
+app.get('/api/avatars', async (req, res) => {
+  try {
+    const names = String(req.query.names || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean).slice(0, 60);
+    if (!names.length) return res.json({});
+    const r = await q('select username, avatar from users where username = any($1) and avatar is not null', [names]);
+    const out = {};
+    r.rows.forEach(row => { out[row.username] = row.avatar; });
+    res.json(out);
+  } catch (e) { res.json({}); }
 });
 
 app.post('/api/auth/logout', async (req, res) => {
@@ -301,6 +333,30 @@ app.post('/api/auth/claim', async (req, res) => {
         moved += r.rowCount || 0;
       } catch (e) { /* skip */ }
     }
+
+    /* also merge videos whose uploader matches the account name
+       ignoring spaces/underscores/case ("Vadim Playground" ≈ vadim_playground) */
+    try {
+      const olds = await q(
+        `select distinct uploader from videos where uploader <> $1
+         and regexp_replace(lower(uploader), '[^a-z0-9]', '', 'g') = regexp_replace(lower($1), '[^a-z0-9]', '', 'g')`,
+        [username]);
+      const r = await q(
+        `update videos set uploader = $1 where uploader <> $1
+         and regexp_replace(lower(uploader), '[^a-z0-9]', '', 'g') = regexp_replace(lower($1), '[^a-z0-9]', '', 'g')`,
+        [username]);
+      moved += r.rowCount || 0;
+      if (olds.rows.length) {
+        try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [username]); } catch (e) {}
+        for (const o of olds.rows) {
+          try {
+            await q(`update creators set subs = creators.subs + (select coalesce(subs, 0) from creators where name = $2) where name = $1`, [username, o.uploader]);
+            await q('delete from creators where name = $1', [o.uploader]);
+          } catch (e) {}
+        }
+      }
+    } catch (e) { /* non-fatal */ }
+
     if (moved > 0) {
       try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [username]); } catch (e) {}
     }
@@ -432,7 +488,35 @@ app.post('/api/videos/complete', async (req, res) => {
   }
 });
 
-/* ── Stream a (possibly multi-segment) video as ONE file with Range support ── */
+/* ── Stream a (possibly multi-segment) video as ONE file with Range support.
+   Segments are cached in memory (LRU ~3 × 32MB) and the NEXT segment is
+   prefetched in the background while the current one plays → instant switches. ── */
+const segCache = new Map(); // url -> { buf: Buffer|null, done: boolean }
+
+function segWarm(url, authH) {
+  if (segCache.has(url)) return;
+  const e = { buf: null, done: false };
+  segCache.set(url, e);
+  while (segCache.size > 3) segCache.delete(segCache.keys().next().value);
+  (async () => {
+    const r = await fetch(url, { headers: authH });
+    if (!r.ok || !r.body) { segCache.delete(url); return; }
+    const chunks = [];
+    for await (const c of r.body) chunks.push(Buffer.from(c));
+    e.buf = Buffer.concat(chunks);
+    e.done = true;
+  })().catch(() => { try { segCache.delete(url); } catch (x) {} });
+}
+
+function segSlice(url, from, to, res) {
+  const e = segCache.get(url);
+  if (e && e.done && e.buf && e.buf.length > from) {
+    res.end(e.buf.subarray(from, Math.min(to, e.buf.length - 1) + 1));
+    return true;
+  }
+  return false;
+}
+
 async function streamOut(req, res) {
   try {
     const r = await q('select video_path, parts, sizes, store from videos where id = $1', [req.params.id]);
@@ -462,8 +546,10 @@ async function streamOut(req, res) {
       res.status(200);
       res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('Content-Type', 'video/mp4');
-      for (const p of paths) {
-        const rr = await fetch(p, { headers: authH });
+      for (let i = 0; i < paths.length; i++) {
+        if (i + 1 < paths.length) segWarm(paths[i + 1], authH); // prefetch next
+        if (segSlice(paths[i], 0, Infinity, res)) continue;
+        const rr = await fetch(paths[i], { headers: authH });
         if (rr.ok) await pipe(rr.body);
       }
       res.end();
@@ -491,6 +577,11 @@ async function streamOut(req, res) {
       if (segEnd < cursor) continue;
       const from = cursor - segStart;
       const to = end - segStart;
+
+      /* prefetch next segment in the background → instant switching */
+      if (i + 1 < paths.length) segWarm(paths[i + 1], authH);
+
+      if (segSlice(paths[i], from, to, res)) { cursor = segEnd + 1; break; }
       const rr = await fetch(paths[i], {
         headers: Object.assign({}, authH, { Range: `bytes=${from}-${to}` }),
       });
