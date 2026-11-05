@@ -951,9 +951,9 @@
             await sendSegP(i, blob, 1, 1);
           }
         };
-        /* 6 parallel lanes: saturates the uplink without blowing the
-           free server's RAM (more would OOM it, all-at-once = crash) */
-        await Promise.all([worker(), worker(), worker(), worker(), worker(), worker()]);
+        /* 4 parallel lanes: saturates the uplink while staying under
+           GitHub's concurrent-upload abuse detection */
+        await Promise.all([worker(), worker(), worker(), worker()]);
 
         setProg('⚡ Finalizing…', 1);
         const res = await api('/api/videos/complete', {
