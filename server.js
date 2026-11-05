@@ -177,6 +177,22 @@ async function migrate() {
   )`);
   await q(`alter table users add column if not exists avatar text`);
   await q(`alter table users add column if not exists banner text`);
+  await q(`alter table users add column if not exists avatar_url text`);
+  await q(`alter table users add column if not exists banner_url text`);
+  await q(`create table if not exists polls (
+    id uuid primary key default gen_random_uuid(),
+    video_id uuid references videos(id) on delete cascade,
+    question text not null,
+    options jsonb not null,
+    created_at timestamptz default now()
+  )`);
+  await q(`create table if not exists poll_votes (
+    poll_id uuid references polls(id) on delete cascade,
+    voter text not null,
+    opt int not null,
+    created_at timestamptz default now(),
+    primary key (poll_id, voter)
+  )`);
   await q(`create table if not exists announcements (
     id bigserial primary key,
     text text not null,
@@ -244,6 +260,61 @@ const num = v => Number(v) || 0;
 
 /* ── API ── */
 
+/* anti-spam cooldowns (seconds left, or 0 = allowed) */
+const cooldowns = new Map();
+function cdCheck(key, ms) {
+  const now = Date.now();
+  const last = cooldowns.get(key) || 0;
+  if (now - last < ms) return Math.ceil((ms - (now - last)) / 1000);
+  if (cooldowns.size > 4000) cooldowns.clear();
+  cooldowns.set(key, now);
+  return 0;
+}
+const clientIp = req => String((req.headers && req.headers['x-forwarded-for']) || '').split(',')[0].trim() || 'anon';
+
+/* ONE round-trip boot: feed + creators + avatars + announcement + account */
+app.get('/api/boot', async (req, res) => {
+  try {
+    const vids = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,created_at
+                          from videos order by created_at desc limit 200`);
+    let creators = {};
+    try {
+      await q('insert into creators (name, subs) select distinct uploader, 0 from videos on conflict (name) do nothing');
+      const cr = await q('select name, subs from creators');
+      cr.rows.forEach(r => { creators[r.name] = num(r.subs); });
+    } catch (e) {}
+    const avatars = {};
+    try {
+      const ups = [];
+      const seen = {};
+      vids.rows.forEach(r => { const k = String(r.uploader || '').toLowerCase(); if (k && !seen[k]) { seen[k] = 1; ups.push(k); } });
+      if (ups.length) {
+        const av = await q('select username, avatar_url from users where username = any($1) and avatar_url is not null', [ups.slice(0, 60)]);
+        av.rows.forEach(r => { avatars[r.username] = r.avatar_url; });
+      }
+    } catch (e) {}
+    let announcement = null;
+    try {
+      const ann = await q('select id, text, created_at from announcements order by id desc limit 1');
+      announcement = ann.rows[0] || null;
+    } catch (e) {}
+    let me = null;
+    const u = await authUser(req);
+    if (u) {
+      try {
+        const r = await q('select username, avatar_url, banner_url from users where username = $1', [u]);
+        me = r.rows[0] || { username: u };
+      } catch (e) { me = { username: u }; }
+    }
+    res.json({
+      videos: vids.rows.map(row => Object.assign({}, row, {
+        views: num(row.views), likes: num(row.likes), parts: Math.max(1, Number(row.parts) || 1),
+      })),
+      creators, avatars, announcement, me,
+    });
+  } catch (e) { res.status(500).json({ error: 'boot failed' }); }
+});
+
 /* auth: signup / login / me / logout */
 app.post('/api/auth/signup', async (req, res) => {
   try {
@@ -280,34 +351,45 @@ app.get('/api/auth/me', async (req, res) => {
   const username = await authUser(req);
   if (!username) return res.status(401).json({ error: 'not logged in' });
   try {
-    const r = await q('select username, avatar, banner from users where username = $1', [username]);
+    const r = await q('select username, avatar_url, banner_url from users where username = $1', [username]);
     const u = r.rows[0] || {};
-    res.json({ username, avatar: u.avatar || null, banner: u.banner || null });
+    res.json({ username, avatar_url: u.avatar_url || null, banner_url: u.banner_url || null });
   } catch (e) { res.json({ username }); }
 });
 
-/* save account avatar/banner (synced across devices) */
+/* save account avatar/banner as FILES (browser-cacheable URLs) */
 app.post('/api/auth/profile', async (req, res) => {
   const username = await authUser(req);
   if (!username) return res.status(401).json({ error: 'not logged in' });
-  const avatar = String((req.body && req.body.avatar) || '');
-  const banner = String((req.body && req.body.banner) || '');
-  if (avatar && !(avatar.startsWith('data:image/') && avatar.length < 2000000)) return res.status(400).json({ error: 'bad avatar' });
-  if (banner && !(banner.startsWith('data:image/') && banner.length < 2000000)) return res.status(400).json({ error: 'bad banner' });
+  const b = req.body || {};
+  const out = {};
   try {
-    await q('update users set avatar = $2, banner = $3 where username = $1', [username, avatar || null, banner || null]);
-    res.json({ ok: true });
+    if (b.avatar) {
+      if (!String(b.avatar).startsWith('data:image/') || String(b.avatar).length > 2000000) return res.status(400).json({ error: 'bad avatar' });
+      const p = 'avatars/' + username + '.jpg';
+      await sbPut(p, Buffer.from(String(b.avatar).split(',')[1], 'base64'), 'image/jpeg');
+      await q('update users set avatar_url = $2 where username = $1', [username, pubUrl(p)]);
+      out.avatar_url = pubUrl(p);
+    }
+    if (b.banner) {
+      if (!String(b.banner).startsWith('data:image/') || String(b.banner).length > 2000000) return res.status(400).json({ error: 'bad banner' });
+      const p = 'banners/' + username + '.jpg';
+      await sbPut(p, Buffer.from(String(b.banner).split(',')[1], 'base64'), 'image/jpeg');
+      await q('update users set banner_url = $2 where username = $1', [username, pubUrl(p)]);
+      out.banner_url = pubUrl(p);
+    }
+    res.json(Object.assign({ ok: true }, out));
   } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
 
-/* batch avatar lookup for comments/feed */
+/* batch avatar lookup (URLs — tiny payload) */
 app.get('/api/avatars', async (req, res) => {
   try {
     const names = String(req.query.names || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean).slice(0, 60);
     if (!names.length) return res.json({});
-    const r = await q('select username, avatar from users where username = any($1) and avatar is not null', [names]);
+    const r = await q('select username, avatar_url from users where username = any($1) and avatar_url is not null', [names]);
     const out = {};
-    r.rows.forEach(row => { out[row.username] = row.avatar; });
+    r.rows.forEach(row => { out[row.username] = row.avatar_url; });
     res.json(out);
   } catch (e) { res.json({}); }
 });
@@ -641,6 +723,8 @@ app.get('/api/videos/:id/comments', async (req, res) => {
 app.post('/api/videos/:id/comments', async (req, res) => {
   try {
     const authName = await authUser(req);
+    const wait = cdCheck('cm:' + (authName || clientIp(req)), 10000);
+    if (wait) return res.status(429).json({ error: 'cooldown — wait ' + wait + 's before commenting again' });
     const author = authName || String((req.body && req.body.author) || 'Anonymous').slice(0, 50);
     const text = String((req.body && req.body.text) || '').trim().slice(0, 500);
     if (!text) return res.status(400).json({ error: 'empty comment' });
@@ -685,6 +769,88 @@ app.delete('/api/videos/:id', async (req, res) => {
     if (row.thumb_path) await sbDelete(row.thumb_path);
     res.sendStatus(204);
   } catch (e) { res.status(500).json({ error: 'db down' }); }
+});
+
+/* ── polls on videos ── */
+async function pollFor(videoId, req) {
+  const r = await q('select id, question, options, created_at from polls where video_id = $1 order by created_at desc limit 1', [videoId]);
+  if (!r.rows.length) return null;
+  const p = r.rows[0];
+  let options = p.options;
+  if (!Array.isArray(options)) { try { options = JSON.parse(options); } catch (e) { options = []; } }
+  const counts = await q('select opt, count(*)::int as n from poll_votes where poll_id = $1 group by opt', [p.id]);
+  const tally = new Array(options.length).fill(0);
+  counts.rows.forEach(c => { const i = Number(c.opt); if (i >= 0 && i < tally.length) tally[i] = Number(c.n); });
+  let myVote = null;
+  const authName = await authUser(req);
+  const vid = String((req.query && req.query.voter) || authName || '');
+  if (vid) {
+    const mv = await q('select opt from poll_votes where poll_id = $1 and voter = $2', [p.id, vid]);
+    myVote = mv.rows.length ? Number(mv.rows[0].opt) : null;
+  }
+  return { id: p.id, question: p.question, options, counts: tally, total: tally.reduce((a, b) => a + b, 0), myVote };
+}
+
+app.get('/api/videos/:id/poll', async (req, res) => {
+  try { res.json(await pollFor(req.params.id, req)); } catch (e) { res.json(null); }
+});
+
+app.post('/api/videos/:id/poll', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const isAdmin = req.get('x-admin-key') === ADMIN_KEY;
+    const authName = await authUser(req);
+    let allowed = isAdmin;
+    if (!allowed && authName) {
+      const r = await q('select uploader from videos where id = $1', [req.params.id]);
+      allowed = r.rows.length && r.rows[0].uploader === authName;
+    }
+    if (!allowed) return res.status(403).json({ error: 'only the owner or admin can add polls' });
+    const wait = cdCheck('pollcreate:' + req.params.id, 10000);
+    if (wait) return res.status(429).json({ error: 'cooldown — wait ' + wait + 's' });
+    const question = String(b.question || '').trim().slice(0, 200);
+    let options = (Array.isArray(b.options) ? b.options : String(b.options || '').split(','))
+      .map(o => String(o).trim()).filter(Boolean).slice(0, 6);
+    if (!question || options.length < 2) return res.status(400).json({ error: 'need a question and 2-6 options' });
+    await q('delete from polls where video_id = $1', [req.params.id]);
+    await q('insert into polls (video_id, question, options) values ($1,$2,$3)', [req.params.id, question, JSON.stringify(options)]);
+    res.status(201).json(await pollFor(req.params.id, req));
+  } catch (e) { res.status(500).json({ error: 'poll failed' }); }
+});
+
+app.post('/api/polls/:id/vote', async (req, res) => {
+  try {
+    const opt = parseInt((req.body && req.body.opt), 10);
+    const authName = await authUser(req);
+    const voter = String((req.body && req.body.voter) || authName || '').slice(0, 60).toLowerCase();
+    if (!voter || !Number.isInteger(opt)) return res.status(400).json({ error: 'bad vote' });
+    const wait = cdCheck('vote:' + voter, 3000);
+    if (wait) return res.status(429).json({ error: 'cooldown — wait ' + wait + 's' });
+    const p = await q('select id, options from polls where id = $1', [req.params.id]);
+    if (!p.rows.length) return res.status(404).json({ error: 'poll not found' });
+    let options = p.rows[0].options;
+    if (!Array.isArray(options)) { try { options = JSON.parse(options); } catch (e) { options = []; } }
+    if (opt < 0 || opt >= options.length) return res.status(400).json({ error: 'bad option' });
+    const done = await q('insert into poll_votes (poll_id, voter, opt) values ($1,$2,$3) on conflict (poll_id, voter) do nothing returning opt', [req.params.id, voter, opt]);
+    if (!done.rows.length) return res.status(409).json({ error: 'you already voted' });
+    const full = await q('select video_id from polls where id = $1', [req.params.id]);
+    res.json(await pollFor(full.rows[0].video_id, req));
+  } catch (e) { res.status(500).json({ error: 'vote failed' }); }
+});
+
+app.delete('/api/videos/:id/poll', async (req, res) => {
+  try {
+    const isAdmin = req.get('x-admin-key') === ADMIN_KEY;
+    const authName = await authUser(req);
+    let allowed = isAdmin;
+    if (!allowed && authName) {
+      const r = await q('select uploader from videos where id = $1', [req.params.id]);
+      allowed = r.rows.length && r.rows[0].uploader === authName;
+    }
+    if (!allowed) return res.status(403).json({ error: 'not allowed' });
+    await q('delete from polls where video_id = $1', [req.params.id]);
+    res.sendStatus(204);
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
 
 /* ── announcements (single active, admin-managed) ── */
