@@ -842,12 +842,44 @@
           }
         };
 
-        for (let i = 0; i < segCount; i++) {
-          const blob = file.slice(i * CHUNK, Math.min((i + 1) * CHUNK, total));
-          await sendSeg(i, blob, 1);
-          sent += blob.size;
-          setProg('📡 Segment ' + (i + 1) + '/' + segCount + ' done — ' + Math.floor((sent / total) * 100) + '%', sent / total);
-        }
+        /* upload segments in PARALLEL (2 at a time) with aggregated progress */
+        const progLoaded = {};
+        let sendIdx = 0;
+        let sentDone = 0;
+        const pctOf = () => {
+          let b = sentDone;
+          for (const k in progLoaded) b += progLoaded[k];
+          return Math.min(1, b / total);
+        };
+        const sendSegP = async (i, blob, attempt) => {
+          const fd = new FormData();
+          fd.append('video', blob, (file.name || 'video') + '.part' + i);
+          fd.append('index', String(i));
+          try {
+            await xhrSend('POST', '/api/videos/' + uid + '/segment', fd, {}, loaded => {
+              progLoaded[i] = loaded;
+              setProg('📡 Uploading — ' + Math.floor(pctOf() * 100) + '%', pctOf());
+            });
+            delete progLoaded[i];
+            sentDone += blob.size;
+            setProg('📡 Uploading — ' + Math.floor(pctOf() * 100) + '%', pctOf());
+          } catch (e) {
+            if (attempt < 3) {
+              setProg('⚠️ Segment hiccup — retrying (' + attempt + '/2)…', pctOf());
+              await new Promise(r => setTimeout(r, 2500));
+              return sendSegP(i, blob, attempt + 1);
+            }
+            throw e;
+          }
+        };
+        const worker = async () => {
+          while (sendIdx < segCount) {
+            const i = sendIdx++;
+            const blob = file.slice(i * CHUNK, Math.min((i + 1) * CHUNK, total));
+            await sendSegP(i, blob, 1);
+          }
+        };
+        await Promise.all([worker(), worker()]);
 
         setProg('⚡ Finalizing…', 1);
         const res = await api('/api/videos/complete', {
@@ -1177,20 +1209,59 @@
     else slot.innerHTML = '';
   }
 
+  /* poll builder modal (used by owners + admin) */
+  function openPollModal(videoId) {
+    const old = $('#pollModal'); if (old) old.remove();
+    const d = document.createElement('div');
+    d.className = 'admin-overlay';
+    d.id = 'pollModal';
+    d.innerHTML = '<div class="admin-box">'
+      + '<div class="admin-head"><span>📊 Create a poll</span><button class="admin-close" id="pmClose">✕</button></div>'
+      + '<div class="admin-body">'
+      + '<div class="field"><label>Question</label><input id="pmQ" maxlength="200" placeholder="What do you think about…"></div>'
+      + '<div class="field"><label>Options</label><div id="pmOpts">'
+      + '<input class="pm-opt" maxlength="80" placeholder="Option 1"><input class="pm-opt" maxlength="80" placeholder="Option 2">'
+      + '</div><button type="button" class="pill-btn ghost" id="pmAdd" style="margin-top:8px">＋ Add option</button></div>'
+      + '<div class="form-err" id="pmErr"></div>'
+      + '<button class="btn-neon" id="pmCreate" style="justify-content:center">📊 Create poll</button>'
+      + '</div></div>';
+    document.body.appendChild(d);
+    const optsWrap = $('#pmOpts');
+    const close = () => d.remove();
+    $('#pmClose').onclick = close;
+    d.addEventListener('click', e => { if (e.target === d) close(); });
+    $('#pmAdd').onclick = () => {
+      if (optsWrap.querySelectorAll('.pm-opt').length >= 6) return;
+      const inp = document.createElement('input');
+      inp.className = 'pm-opt'; inp.maxLength = 80;
+      inp.placeholder = 'Option ' + (optsWrap.querySelectorAll('.pm-opt').length + 1);
+      inp.style.marginTop = '8px';
+      optsWrap.appendChild(inp);
+    };
+    $('#pmCreate').onclick = async () => {
+      const question = $('#pmQ').value.trim();
+      const options = [...optsWrap.querySelectorAll('.pm-opt')].map(i => i.value.trim()).filter(Boolean);
+      $('#pmErr').textContent = '';
+      if (!question || options.length < 2) { $('#pmErr').textContent = '⚠️ Need a question and at least 2 options.'; return; }
+      const btn = $('#pmCreate');
+      btn.disabled = true; btn.textContent = '⏳ Creating…';
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (!(S.myDelKeys[videoId]) && !(S.auth && S.auth.username)) headers['X-Admin-Key'] = ADMIN_KEY;
+        await api('/api/videos/' + videoId + '/poll', { method: 'POST', headers, body: JSON.stringify({ question, options }) });
+        toast('Poll created', '📊');
+        close();
+        loadPoll(videoId);
+      } catch (e) {
+        $('#pmErr').textContent = '⚠️ ' + (e.message || 'failed');
+        btn.disabled = false; btn.textContent = '📊 Create poll';
+      }
+    };
+    setTimeout(() => { const q = $('#pmQ'); if (q) q.focus(); }, 60);
+  }
+
   async function createPollFlow(vid) {
-    const question = prompt('Poll question?');
-    if (!question) return;
-    const options = prompt('Options (separate with commas):\nexample: Yes, No, Maybe');
-    if (!options) return;
-    try {
-      await api('/api/videos/' + vid + '/poll', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, options })
-      });
-      toast('Poll created', '📊');
-      loadPoll(vid);
-    } catch (e) { toast(e.message || 'poll failed', '⚠️'); }
+    openPollModal(vid);
   }
 
   function renderMe() {
@@ -1298,8 +1369,7 @@
       + '<div class="admin-row"><input type="text" id="adminTransferTo" maxlength="50" placeholder="account / creator name"><button class="pill-btn" data-admin="transfer">📦 Transfer video to name</button></div>'
       + '<div class="admin-row"><input type="text" id="adminAnnText" maxlength="300" placeholder="📣 Announcement text (everyone sees it)"><button class="pill-btn" data-admin="announce">📣 Post</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">announcement shows as a banner on the site</span><button class="pill-btn danger" data-admin="announce-clear">🗑 Remove announcement</button></div>'
-      + '<div class="admin-row"><input type="text" id="adminPollQ" maxlength="200" placeholder="📊 Poll question"><button class="pill-btn" data-admin="poll">📊 Create poll</button></div>'
-      + '<div class="admin-row"><input type="text" id="adminPollO" maxlength="200" placeholder="Options: Yes, No, Maybe"><span class="muted-txt" style="align-self:center;font-size:13px">for the selected video</span></div>'
+      + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">create a poll for the selected video</span><button class="pill-btn" data-admin="poll">📊 Create poll</button></div>'
       + '</div>'
       + '<p class="muted-txt">Applies on the server — everyone sees it. Comments come from randomly generated accounts.</p>'
       + '</div></div>';
@@ -1368,19 +1438,9 @@
     }
 
     if (kind === 'poll') {
-      const q = ($('#adminPollQ') && $('#adminPollQ').value || '').trim();
-      const o = ($('#adminPollO') && $('#adminPollO').value || '').trim();
-      if (!q || !o.includes(',')) { toast('Enter a question and options (comma separated)', '⚠️'); return; }
-      try {
-        await api('/api/videos/' + id + '/poll', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
-          body: JSON.stringify({ question: q, options: o })
-        });
-        toast('Poll created 📊', '✅');
-        $('#adminPollQ').value = ''; $('#adminPollO').value = '';
-        if (location.hash.includes('/watch/')) loadPoll(location.hash.split('/watch/')[1]);
-      } catch (e) { toast('Poll failed: ' + (e.message || 'error'), '⚠️'); }
+      if (!id) { toast('No video selected', '⚠️'); return; }
+      $('#adminPanel').classList.add('hide');
+      openPollModal(id);
       return;
     }
 
