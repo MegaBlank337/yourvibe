@@ -44,23 +44,29 @@
   let CREATORS = {};   // { uploaderName: subscriberCount }
   let videosLoaded = false;
 
-  async function loadVideos() {
-    const [vids, creators] = await Promise.all([
-      api('/api/videos'),
-      api('/api/creators').catch(() => ({})),
-    ]);
-    VIDEOS = vids;
-    CREATORS = creators || {};
+  /* ONE round-trip boot (fast): feed + creators + avatars + announcement + account */
+  async function loadBoot() {
+    const b = await api('/api/boot');
+    VIDEOS = b.videos || [];
+    CREATORS = b.creators || {};
+    AVATARS = Object.assign({}, b.avatars || {});
     videosLoaded = true;
+    if (b.announcement !== undefined) { ANN = b.announcement; renderAnnouncement(); }
+    if (b.me && S.auth && S.auth.token) {
+      if (b.me.avatar_url) { S.acctAvatar = b.me.avatar_url; AVATARS[S.auth.username.toLowerCase()] = b.me.avatar_url; }
+      if (b.me.banner_url) S.acctBanner = b.me.banner_url;
+      renderMe();
+    }
     saveFeedCache();
-    loadAvatars(VIDEOS.map(v => v.uploader)); // real icons for account holders
   }
+
+  async function loadVideos() { return loadBoot(); }
 
   /* ── instant-load feed cache (stale-while-revalidate) ── */
   const FEED_CACHE = 'yv_feed_v1';
 
   function saveFeedCache() {
-    try { localStorage.setItem(FEED_CACHE, JSON.stringify({ v: VIDEOS, c: CREATORS, t: Date.now() })); } catch (e) {}
+    try { localStorage.setItem(FEED_CACHE, JSON.stringify({ v: VIDEOS, c: CREATORS, a: AVATARS, t: Date.now() })); } catch (e) {}
   }
 
   function hydrateFeedCache() {
@@ -71,6 +77,7 @@
       if (!Array.isArray(j.v)) return false;
       VIDEOS = j.v;
       CREATORS = j.c || {};
+      AVATARS = j.a || {};
       videosLoaded = true;
       return true;
     } catch (e) { return false; }
@@ -78,7 +85,8 @@
 
   function feedSig() {
     return VIDEOS.length + '|' + VIDEOS.map(x => x.id + ':' + (x.views || 0) + ':' + (x.likes || 0)).join(',').length
-      + '|' + Object.keys(CREATORS).map(k => k + CREATORS[k]).join('').length;
+      + '|' + Object.keys(CREATORS).map(k => k + CREATORS[k]).join('').length
+      + '|' + Object.keys(AVATARS).length;
   }
 
   function byId(id) { return VIDEOS.find(v => v.id === id); }
@@ -202,8 +210,9 @@
     size = size || 36;
     let ch = c;
     if (c && (c.isMe || c.id === 'me')) {
-      if (S.myChannel.avatar) return '<span class="av av-img" style="width:' + size + 'px;height:' + size + 'px"><img src="' + S.myChannel.avatar + '" alt=""></span>';
-      ch = { name: S.myChannel.name, colors: S.myChannel.colors };
+      const mine = (S.auth && S.auth.username ? (S.acctAvatar || AVATARS[S.auth.username.toLowerCase()]) : null) || S.myChannel.avatar;
+      if (mine) return '<span class="av av-img" style="width:' + size + 'px;height:' + size + 'px"><img src="' + mine + '" alt=""></span>';
+      ch = { name: myName(), colors: S.myChannel.colors };
     }
     const p = (ch && ch.colors) ? ch.colors : palFor(ch && ch.name);
     const accAvatar = AVATARS[((ch && ch.name) || '').toLowerCase()];
@@ -403,7 +412,7 @@
     const totalLikes = mine.reduce((a, v) => a + likesOf(v), 0);
 
     main.innerHTML = '<div class="channel-page" data-scope="me">'
-      + '<div class="banner"' + (c.banner ? ' style="background-image:url(' + c.banner + ')"' : ' style="--c1:' + c.colors[0] + ';--c2:' + c.colors[1] + '"') + '></div>'
+      + '<div class="banner"' + ((S.acctBanner || c.banner) ? ' style="background-image:url(' + (S.acctBanner || c.banner) + ')"' : ' style="--c1:' + c.colors[0] + ';--c2:' + c.colors[1] + '"') + '></div>'
       + '<div class="ch-head">'
       + '<span class="ch-ava">' + avatarHTML(meCh(), 96) + '</span>'
       + '<div class="ch-id"><h1 class="ch-name-big">' + esc(c.name) + '</h1>'
@@ -534,8 +543,10 @@
       + '<button class="act-btn" data-action="share" data-id="' + v.id + '">🔗 Share</button>'
       + '<button class="act-btn' + (S.later[v.id] ? ' on' : '') + '" data-action="later" data-id="' + v.id + '">⏳ Later</button>'
       + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="act-btn danger" data-action="del" data-id="' + v.id + '">🗑 Delete</button>' : '')
+      + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="act-btn" data-action="addpoll" data-id="' + v.id + '">📊 Poll</button>' : '')
       + '</div>'
-      + '<div class="w-desc"><b>' + fmtNum(viewsOf(v)) + ' views · ' + agoOf(v) + (v.category ? ' · #' + esc(v.category) : '') + '</b><br>' + esc(v.description || '') + '</div>'
+        + '<div class="w-desc"><b>' + fmtNum(viewsOf(v)) + ' views · ' + agoOf(v) + (v.category ? ' · #' + esc(v.category) : '') + '</b><br>' + esc(v.description || '') + '</div>'
+      + '<div id="pollSlot"></div>'
       + '<div id="comments-slot">' + loadingHTML() + '</div>'
       + '</div>'
       + '<aside class="related"><h2 class="section-title">Up next ⚡</h2>'
@@ -543,6 +554,7 @@
       + '</aside></div>';
 
     commentsHTML(v).then(html => { const slot = $('#comments-slot'); if (slot) slot.outerHTML = html; });
+    loadPoll(v.id);
     initPlayer();
   }
 
@@ -1091,9 +1103,8 @@
     if (!S.auth || !S.auth.token) return;
     try {
       const me = await api('/api/auth/me');
-      if (me.avatar) { S.myChannel.avatar = me.avatar; AVATARS[S.auth.username.toLowerCase()] = me.avatar; }
-      if (me.banner) S.myChannel.banner = me.banner;
-      YV.store.save();
+      if (me.avatar_url) { S.acctAvatar = me.avatar_url; AVATARS[S.auth.username.toLowerCase()] = me.avatar_url; }
+      if (me.banner_url) S.acctBanner = me.banner_url;
       renderMe();
     } catch (e) {}
   }
@@ -1102,14 +1113,84 @@
   async function saveProfileToAccount(patch) {
     if (!S.auth || !S.auth.token) return;
     try {
-      await api('/api/auth/profile', {
+      const r = await api('/api/auth/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch)
       });
-      if (patch.avatar) AVATARS[S.auth.username.toLowerCase()] = patch.avatar;
+      if (r.avatar_url) { S.acctAvatar = r.avatar_url; AVATARS[S.auth.username.toLowerCase()] = r.avatar_url; }
+      if (r.banner_url) { S.acctBanner = r.banner_url; }
       renderMe();
     } catch (e) {}
+  }
+
+  /* ═══════════ polls ═══════════ */
+  function voterTag() {
+    if (S.auth && S.auth.username) return S.auth.username;
+    let v = null;
+    try {
+      v = localStorage.getItem('yv_voter');
+      if (!v) { v = 'guest-' + Math.random().toString(36).slice(2, 10); localStorage.setItem('yv_voter', v); }
+    } catch (e) { v = 'guest-' + Date.now(); }
+    return v;
+  }
+
+  function renderPoll(slot, vid, p) {
+    const voted = p.myVote !== null && p.myVote !== undefined;
+    const opts = p.options.map((o, i) => {
+      const pct = p.total ? Math.round((p.counts[i] / p.total) * 100) : 0;
+      if (voted) {
+        const mine = p.myVote === i;
+        return '<button class="poll-opt done' + (mine ? ' mine' : '') + '">'
+          + '<i class="po-bar" style="width:' + pct + '%"></i>'
+          + '<span class="po-t">' + esc(o) + (mine ? ' ✓' : '') + '</span>'
+          + '<span class="po-pct">' + pct + '%</span></button>';
+      }
+      return '<button class="poll-opt" data-pollopt="' + i + '">'
+        + '<i class="po-bar" style="width:0%"></i>'
+        + '<span class="po-t">' + esc(o) + '</span></button>';
+    }).join('');
+    slot.innerHTML = '<div class="poll-card"><h3>📊 ' + esc(p.question) + '</h3>'
+      + opts + '<div class="poll-total">' + fmtNum(p.total) + ' vote' + (p.total === 1 ? '' : 's') + '</div></div>';
+    slot.querySelectorAll('[data-pollopt]').forEach(btn => {
+      btn.onclick = async () => {
+        btn.disabled = true;
+        try {
+          const r = await api('/api/polls/' + p.id + '/vote', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ opt: Number(btn.dataset.pollopt), voter: voterTag() })
+          });
+          renderPoll(slot, vid, r);
+          toast('Vote counted', '📊');
+        } catch (e) { btn.disabled = false; toast(e.message || 'vote failed', '⚠️'); }
+      };
+    });
+  }
+
+  async function loadPoll(vid) {
+    const slot = $('#pollSlot');
+    if (!slot) return;
+    let p = null;
+    try { p = await api('/api/videos/' + vid + '/poll'); } catch (e) {}
+    if (p && p.id) renderPoll(slot, vid, p);
+    else slot.innerHTML = '';
+  }
+
+  async function createPollFlow(vid) {
+    const question = prompt('Poll question?');
+    if (!question) return;
+    const options = prompt('Options (separate with commas):\nexample: Yes, No, Maybe');
+    if (!options) return;
+    try {
+      await api('/api/videos/' + vid + '/poll', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, options })
+      });
+      toast('Poll created', '📊');
+      loadPoll(vid);
+    } catch (e) { toast(e.message || 'poll failed', '⚠️'); }
   }
 
   function renderMe() {
@@ -1217,6 +1298,8 @@
       + '<div class="admin-row"><input type="text" id="adminTransferTo" maxlength="50" placeholder="account / creator name"><button class="pill-btn" data-admin="transfer">📦 Transfer video to name</button></div>'
       + '<div class="admin-row"><input type="text" id="adminAnnText" maxlength="300" placeholder="📣 Announcement text (everyone sees it)"><button class="pill-btn" data-admin="announce">📣 Post</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">announcement shows as a banner on the site</span><button class="pill-btn danger" data-admin="announce-clear">🗑 Remove announcement</button></div>'
+      + '<div class="admin-row"><input type="text" id="adminPollQ" maxlength="200" placeholder="📊 Poll question"><button class="pill-btn" data-admin="poll">📊 Create poll</button></div>'
+      + '<div class="admin-row"><input type="text" id="adminPollO" maxlength="200" placeholder="Options: Yes, No, Maybe"><span class="muted-txt" style="align-self:center;font-size:13px">for the selected video</span></div>'
       + '</div>'
       + '<p class="muted-txt">Applies on the server — everyone sees it. Comments come from randomly generated accounts.</p>'
       + '</div></div>';
@@ -1281,6 +1364,23 @@
         await loadAnnouncement();
         toast('Announcement removed', '🗑');
       } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
+
+    if (kind === 'poll') {
+      const q = ($('#adminPollQ') && $('#adminPollQ').value || '').trim();
+      const o = ($('#adminPollO') && $('#adminPollO').value || '').trim();
+      if (!q || !o.includes(',')) { toast('Enter a question and options (comma separated)', '⚠️'); return; }
+      try {
+        await api('/api/videos/' + id + '/poll', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
+          body: JSON.stringify({ question: q, options: o })
+        });
+        toast('Poll created 📊', '✅');
+        $('#adminPollQ').value = ''; $('#adminPollO').value = '';
+        if (location.hash.includes('/watch/')) loadPoll(location.hash.split('/watch/')[1]);
+      } catch (e) { toast('Poll failed: ' + (e.message || 'error'), '⚠️'); }
       return;
     }
 
@@ -1354,6 +1454,7 @@
     else if (a === 'sub') toggleSub(t.dataset.ch);
     else if (a === 'share') doShare(id);
     else if (a === 'del') doDelete(id);
+    else if (a === 'addpoll') createPollFlow(id);
     else if (a === 'later') { e.preventDefault(); toggleLater(id); }
     else if (a === 'mute-shorts') {
       shortsMuted = !shortsMuted;
@@ -1469,8 +1570,6 @@
   /* render instantly from cache, then refresh silently in the background */
   const hydrated = hydrateFeedCache();
   navigate();
-  loadAnnouncement();
-  syncAccountProfile();
   if (hydrated) {
     const sig = feedSig();
     loadVideos().then(() => {
