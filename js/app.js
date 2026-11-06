@@ -918,9 +918,8 @@
         const sendSegP = async (i, blob, round, attempt) => {
           const fd = new FormData();
           fd.append('video', blob, (file.name || 'video') + '.part' + i);
-          fd.append('index', String(i));
           try {
-            await xhrSend('POST', '/api/videos/' + uid + '/segment', fd, {}, loaded => {
+            await xhrSend('POST', '/api/videos/' + uid + '/segment?index=' + i + '&size=' + blob.size, fd, {}, loaded => {
               progLoaded[i] = loaded;
               setProg('📡 Uploading — ' + Math.floor(pctOf() * 100) + '%', pctOf());
             });
@@ -930,6 +929,15 @@
             saveUp();
             setProg('📡 Uploading — ' + Math.floor(pctOf() * 100) + '%', pctOf());
           } catch (e) {
+            const msg = String(e.message || '');
+            if (msg.includes('segment exists')) {
+              /* already uploaded in a previous attempt — count as done */
+              delete progLoaded[i];
+              sentDone += blob.size;
+              doneSet.add(i);
+              saveUp();
+              return;
+            }
             if (attempt <= RETRY_DELAYS.length) {
               if (attempt >= 3) setProg('⚠️ Weak connection — auto-recovering (' + attempt + '/8)…', pctOf());
               await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt - 1] || 30000));
