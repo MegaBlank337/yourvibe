@@ -18,6 +18,7 @@
      SUPABASE_URL, SUPABASE_SERVICE_KEY, DATABASE_URL, ADMIN_KEY?
    ═══════════════════════════════════════════════════════ */
 const express = require('express');
+const Busboy = require('busboy');
 const multer = require('multer');
 const { Client, Pool } = require('pg');
 const crypto = require('crypto');
@@ -31,6 +32,10 @@ try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+/* crash shields: log async errors instead of letting them kill the process */
+process.on('unhandledRejection', e => console.error('unhandled rejection:', (e && e.message) || e));
+process.on('uncaughtException', e => console.error('uncaught exception:', (e && e.message) || e));
 const MAX_MB = 50;
 const ADMIN_KEY = process.env.ADMIN_KEY || 'neon-admin';
 
@@ -636,26 +641,46 @@ const uploadSeg = multer({
 
 const partPath = (id, i) => `videos/${id}/part${i}.mp4`;
 
-app.post('/api/videos/:id/segment', uploadSeg.single('video'), async (req, res) => {
-  try {
-    const f = req.file;
-    if (!f) return res.status(400).json({ error: 'no segment file' });
-    const id = req.params.id;
-    if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'bad id' });
-    const idx = Math.max(0, Math.min(95, parseInt((req.body && req.body.index) || '0', 10) || 0));
+/* ── SEGMENT UPLOAD — fully STREAMING (zero-buffering): video bytes flow
+   straight through the server to GitHub. Memory stays flat regardless of
+   video size → no more OOM crashes killing uploads. ── */
+app.post('/api/videos/:id/segment', (req, res) => {
+  const id = req.params.id;
+  if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'bad id' });
+  const idx = Math.max(0, Math.min(95, parseInt(String(req.query.index || '0'), 10) || 0));
+  const size = parseInt(String(req.query.size || '0'), 10);
+  if (!size || size > 50 * 1024 * 1024) return res.status(400).json({ error: 'bad size' });
+  if (!ghMode()) return res.status(500).json({ error: 'storage not configured' });
 
-    if (ghMode()) {
-      const asset = await ghPutAsset('v-' + id, 'part' + idx + '.mp4', f.buffer, f.mimetype || 'video/mp4');
-      return res.json({ index: idx, size: f.size, url: asset.browser_download_url, store: 'gh' });
-    }
+  let handled = false;
+  const bb = Busboy({ headers: req.headers, limits: { fileSize: 50 * 1024 * 1024, files: 1 } });
 
-    const p = partPath(id, idx);
-    await sbPut(p, f.buffer, f.mimetype || 'video/mp4');
-    res.json({ index: idx, size: f.size, url: pubUrl(p), store: 'sb' });
-  } catch (e) {
-    console.error('segment error:', e.message);
-    res.status(500).json({ error: 'segment upload failed' });
-  }
+  bb.on('file', (fieldname, file) => {
+    if (handled) { file.resume(); return; }
+    handled = true;
+    (async () => {
+      const rid = await ghReleaseId('v-' + id);
+      const name = 'part' + idx + '.mp4';
+      try {
+        const asset = await ghStreamUpload(rid, name, size, file);
+        res.json({ index: idx, size, url: asset.browser_download_url, store: 'gh' });
+      } catch (e) {
+        file.resume();
+        const msg = String(e.message || '');
+        if (msg.includes('422')) {
+          /* segment with this name already exists (e.g. resumed publish) —
+             client treats this as done */
+          return res.status(409).json({ error: 'segment exists' });
+        }
+        console.error('segment error:', msg.slice(0, 120));
+        res.status(500).json({ error: 'segment upload failed' });
+      }
+    })();
+  });
+
+  bb.on('error', () => { if (!handled) { handled = true; res.status(400).json({ error: 'bad upload' }); } });
+  req.on('error', () => {});
+  req.pipe(bb);
 });
 
 /* size of a remote part (Supabase object or GitHub asset) with retries
