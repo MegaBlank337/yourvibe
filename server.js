@@ -658,24 +658,39 @@ app.post('/api/videos/:id/segment', (req, res) => {
   bb.on('file', (fieldname, file) => {
     if (handled) { file.resume(); return; }
     handled = true;
-    (async () => {
-      const rid = await ghReleaseId('v-' + id);
-      const name = 'part' + idx + '.mp4';
-      try {
-        const asset = await ghStreamUpload(rid, name, size, file);
-        res.json({ index: idx, size, url: asset.browser_download_url, store: 'gh' });
-      } catch (e) {
-        file.resume();
-        const msg = String(e.message || '');
-        if (msg.includes('422')) {
-          /* segment with this name already exists (e.g. resumed publish) —
-             client treats this as done */
-          return res.status(409).json({ error: 'segment exists' });
+    /* buffer the file so we can retry if the release vanished (404) */
+    const chunks = [];
+    file.on('data', c => chunks.push(c));
+    file.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      (async () => {
+        const name = 'part' + idx + '.mp4';
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            const rid = await ghReleaseId('v-' + id);
+            const asset = await ghStreamUpload(rid, name, size, buffer);
+            return res.json({ index: idx, size, url: asset.browser_download_url, store: 'gh' });
+          } catch (e) {
+            const msg = String(e.message || '');
+            if (msg.includes('422')) {
+              /* segment already exists (resumed publish) — treat as done */
+              return res.status(409).json({ error: 'segment exists' });
+            }
+            if (msg.includes('404') && attempt < 3) {
+              console.error('segment 404 — release vanished, recreating (attempt ' + attempt + ')');
+              /* release was deleted → clear cache so ghReleaseId creates a fresh one */
+              continue;
+            }
+            console.error('segment error:', msg.slice(0, 120));
+            return res.status(500).json({ error: 'segment upload failed' });
+          }
         }
-        console.error('segment error:', msg.slice(0, 120));
-        res.status(500).json({ error: 'segment upload failed' });
-      }
-    })();
+        res.status(500).json({ error: 'segment upload failed after retries' });
+      })();
+    });
+    file.on('error', () => {
+      if (!handled) { handled = true; res.status(400).json({ error: 'bad upload' }); }
+    });
   });
 
   bb.on('error', () => { if (!handled) { handled = true; res.status(400).json({ error: 'bad upload' }); } });
