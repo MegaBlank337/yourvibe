@@ -721,22 +721,31 @@ app.post('/api/videos/complete', async (req, res) => {
     const store = ghMode() ? 'gh' : 'sb';
 
     const partUrl0 = store === 'gh' ? ghPartUrl(id, 0) : pubUrl(partPath(id, 0));
-    const sizePs = [];
-    for (let i = 0; i < parts; i++) {
-      sizePs.push(partSize(store === 'gh' ? ghPartUrl(id, i) : SB_URL + '/storage/v1/object/media/' + partPath(id, i), store));
-    }
-    let sizes = await Promise.all(sizePs);
-    /* freshly-uploaded segments can take a moment to appear — wait for stragglers */
-    for (let round = 0; round < 12 && sizes.some(s => !s); round++) {
-      await new Promise(r => setTimeout(r, 2500));
-      const missing = [];
-      sizes.forEach((s, i) => {
-        if (!s) missing.push(partSize(store === 'gh' ? ghPartUrl(id, i) : SB_URL + '/storage/v1/object/media/' + partPath(id, i), store, 1).then(v => { if (v) sizes[i] = v; }));
-      });
-      await Promise.all(missing);
-    }
-    if (!sizes[0] || sizes.some(s => !s)) {
-      return res.status(400).json({ error: 'segments still processing — press Publish again in a minute (your upload progress is saved)' });
+
+    /* FAST PATH: the client sliced the file, so it knows every segment's exact
+       size — trust it. Finalizing becomes instant (no HEAD round-trips). */
+    let sizes = [];
+    const clientSizes = Array.isArray(b.sizes) ? b.sizes.map(Number) : null;
+    if (clientSizes && clientSizes.length === parts && clientSizes.every(s => s > 0 && s <= 50 * 1024 * 1024)) {
+      sizes = clientSizes;
+    } else {
+      /* fallback: ask storage for each segment's size */
+      const sizePs = [];
+      for (let i = 0; i < parts; i++) {
+        sizePs.push(partSize(store === 'gh' ? ghPartUrl(id, i) : SB_URL + '/storage/v1/object/media/' + partPath(id, i), store));
+      }
+      sizes = await Promise.all(sizePs);
+      for (let round = 0; round < 12 && sizes.some(s => !s); round++) {
+        await new Promise(r => setTimeout(r, 2500));
+        const missing = [];
+        sizes.forEach((s, i) => {
+          if (!s) missing.push(partSize(store === 'gh' ? ghPartUrl(id, i) : SB_URL + '/storage/v1/object/media/' + partPath(id, i), store, 1).then(v => { if (v) sizes[i] = v; }));
+        });
+        await Promise.all(missing);
+      }
+      if (!sizes[0] || sizes.some(s => !s)) {
+        return res.status(400).json({ error: 'segments still processing — press Publish again in a minute (your upload progress is saved)' });
+      }
     }
 
     let thumbPath = null, thumbUrl = null;
