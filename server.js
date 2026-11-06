@@ -663,12 +663,15 @@ app.post('/api/videos/:id/segment', (req, res) => {
     file.on('data', c => chunks.push(c));
     file.on('end', () => {
       const buffer = Buffer.concat(chunks);
+      /* wrap the buffer in an async generator that yields it as ONE chunk
+         (iterating a raw Buffer yields individual bytes = crash) */
+      async function* bufSource() { yield buffer; }
       (async () => {
         const name = 'part' + idx + '.mp4';
         for (let attempt = 1; attempt <= 3; attempt++) {
           try {
             const rid = await ghReleaseId('v-' + id);
-            const asset = await ghStreamUpload(rid, name, size, buffer);
+            const asset = await ghStreamUpload(rid, name, size, bufSource());
             return res.json({ index: idx, size, url: asset.browser_download_url, store: 'gh' });
           } catch (e) {
             const msg = String(e.message || '');
@@ -678,7 +681,6 @@ app.post('/api/videos/:id/segment', (req, res) => {
             }
             if (msg.includes('404') && attempt < 3) {
               console.error('segment 404 — release vanished, recreating (attempt ' + attempt + ')');
-              /* release was deleted → clear cache so ghReleaseId creates a fresh one */
               continue;
             }
             console.error('segment error:', msg.slice(0, 120));
