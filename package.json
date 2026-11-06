@@ -2,11 +2,7 @@
   "name": "yourvibe",
   "version": "2.0.0",
   "private": true,
-  "description": "YourVibe — neon video universe with real server-side uploads",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
+  "description": "YourVibe — neon video universe",
   "dependencies": {
     "busboy": "^1.6.0",
     "express": "^4.19.2",
