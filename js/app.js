@@ -904,6 +904,8 @@
 
         /* upload segments in PARALLEL (4 streams) with aggregated progress + auto-retry */
         const progLoaded = {};
+        const segSizes = [];
+        for (let i = 0; i < segCount; i++) segSizes.push(Math.min(CHUNK, total - i * CHUNK));
         let sendIdx = 0;
         let sentDone = 0;
         [...doneSet].forEach(i => { sentDone += Math.min(CHUNK, total - i * CHUNK); });
@@ -976,6 +978,7 @@
             duration: dur ? fmtDur(dur) : '',
             uploader: myName(),
             parts: segCount,
+            sizes: segSizes, // client knows exact sizes -> instant finalize
             thumb: thumbData || null,
           }),
         });
