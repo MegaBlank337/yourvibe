@@ -758,7 +758,7 @@
   function viewUpload() {
     main.innerHTML = '<div class="page up-page">'
       + '<h1 class="page-title">Upload a video</h1>'
-      + '<p class="muted-txt">Your video is stored on the server — everyone can watch it. ~' + YV.PART_MB + ' MB per segment is <b>recommended</b> (not the max): bigger files are automatically split into ' + YV.PART_MB + ' MB segments. Up to ' + YV.MAX_LABEL + ' total.</p>'
+      + '<p class="muted-txt">Upload any video up to <b>2 GB</b> — it streams directly to a global CDN and plays instantly 🚀</p>'
       + '<div class="up-grid">'
       + '<div class="dropzone" id="dz"><input type="file" id="fileIn" accept="video/*" hidden>'
       + '<div class="dz-ico">🎬</div>'
@@ -810,7 +810,7 @@
       if (objUrl) URL.revokeObjectURL(objUrl);
       objUrl = URL.createObjectURL(f);
       const segCount = Math.max(1, Math.ceil(f.size / (YV.PART_MB * 1024 * 1024)));
-      dzName.textContent = '📦 ' + f.name + ' (' + fmtSize(f.size) + (segCount > 1 ? ' → ' + segCount + ' segments' : '') + ')';
+      dzName.textContent = '📦 ' + f.name + ' (' + fmtSize(f.size) + ')';
       dz.classList.add('has');
       prevWrap.classList.remove('hide');
       prevVid.src = objUrl;
@@ -828,7 +828,6 @@
           thMsg.textContent = 'auto-captured from your video — or pick your own above';
         }
         upMeta.textContent = (dur ? '⏱ Duration ' + fmtDur(dur) : '')
-          + (segCount > 1 ? ' · 📦 will upload in ' + segCount + ' segments' : '')
           + ' · ready to publish ✨';
         publish.disabled = false;
       });
