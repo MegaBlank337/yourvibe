@@ -25,7 +25,7 @@
   function runCleanups() { cleanups.forEach(f => { try { f(); } catch (e) {} }); cleanups = []; }
 
   /* ═══════════ API ═══════════ */
-  const API_BASE = (function(){ try { return localStorage.getItem('yv_api_base') || 'https://yourvibe-api.onrender.com'; } catch(e){ return 'https://yourvibe-api.onrender.com'; } })();
+  const API_BASE = (function(){ try { return localStorage.getItem('yv_api_base') || 'https://yourvibe-api-wgyk.onrender.com'; } catch(e){ return 'https://yourvibe-api-wgyk.onrender.com'; } })();
 
   async function api(path, opts) {
     const headers = Object.assign({}, (opts && opts.headers) || {});
