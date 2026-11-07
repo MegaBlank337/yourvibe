@@ -886,6 +886,66 @@
 
       UPLOADING = true;
       try {
+        /* ═══ BUNNY STREAM UPLOAD (direct to CDN) ═══ */
+        try {
+          const bunnyCfg = await api('/api/bunny');
+          if (bunnyCfg && bunnyCfg.libraryId) {
+            setProg('📡 Creating video on CDN…', 0);
+            const create = await fetch('https://video.bunnycdn.com/library/' + bunnyCfg.libraryId + '/videos', {
+              method: 'POST',
+              headers: { AccessKey: bunnyCfg.apiKey, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ title: title })
+            });
+            if (create.ok) {
+              const vj = await create.json();
+              setProg('📡 Uploading to CDN — 0%', 0);
+              const t0 = Date.now();
+              await new Promise((resolve, reject) => {
+                const x = new XMLHttpRequest();
+                x.open('PUT', 'https://video.bunnycdn.com/library/' + bunnyCfg.libraryId + '/videos/' + vj.guid);
+                x.setRequestHeader('AccessKey', bunnyCfg.apiKey);
+                x.setRequestHeader('Content-Type', 'application/octet-stream');
+                x.timeout = 600000;
+                x.upload.onprogress = e => {
+                  if (e.lengthComputable) {
+                    const pct = Math.floor((e.loaded / e.total) * 100);
+                    const speed = (e.loaded / 1048576 / ((Date.now() - t0) / 1000)).toFixed(1);
+                    setProg('📡 Uploading — ' + pct + '% (' + speed + ' MB/s)', e.loaded / e.total);
+                  }
+                };
+                x.onload = () => { if (x.status < 300) resolve(); else reject(new Error('CDN upload ' + x.status)); };
+                x.onerror = () => reject(new Error('network error'));
+                x.ontimeout = () => reject(new Error('timed out'));
+                x.send(file);
+              });
+              setProg('⚡ Publishing…', 1);
+              const res = await api('/api/videos/bunny', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  guid: vj.guid, title,
+                  description: $('#upDesc').value.trim(),
+                  category: $('#upCat').value,
+                  type: $('input[name="upType"]:checked').value,
+                  duration: dur ? fmtDur(dur) : '',
+                  uploader: myName(),
+                })
+              });
+              if (res.del_key) S.myDelKeys[res.id] = res.del_key;
+              YV.store.save();
+              await loadVideos();
+              toast('Published! Video is processing on CDN — playable in ~1 min 🎉', '🚀');
+              location.hash = '#/watch/' + res.id;
+              UPLOADING = false;
+              return;
+            }
+          }
+        } catch (bunnyErr) {
+          console.warn('Bunny upload failed, falling back to segments:', bunnyErr.message);
+          setProg('📡 Using backup upload method…', 0);
+        }
+
+        /* ═══ FALLBACK: legacy segment upload ═══ */
         /* RESUMABLE publishing: remember finished segments for this exact file
            → if anything fails, pressing Publish again continues where it stopped */
         const sig = 'yv_up_' + (file.name || 'v') + '_' + file.size + '_' + (file.lastModified || 0);
