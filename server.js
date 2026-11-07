@@ -33,6 +33,56 @@ try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+/* ── Bunny Stream config ── */
+const BUNNY_LIBRARY = process.env.BUNNY_LIBRARY_ID || '';
+const BUNNY_KEY = process.env.BUNNY_API_KEY || '';
+
+/* serve Bunny credentials to the browser (for direct uploads) */
+app.get('/api/bunny', (req, res) => {
+  if (!BUNNY_LIBRARY || !BUNNY_KEY) return res.json(null);
+  res.json({ libraryId: BUNNY_LIBRARY, apiKey: BUNNY_KEY });
+});
+
+/* publish a video stored on Bunny CDN */
+app.post('/api/videos/bunny', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const guid = String(b.guid || '');
+    if (!/^[a-f0-9-]{36}$/i.test(guid)) return res.status(400).json({ error: 'bad guid' });
+    const authName = await authUser(req);
+    const uploader = authName || String(b.uploader || 'Anonymous').slice(0, 50);
+    const delKey = crypto.randomBytes(16).toString('hex');
+    const title = String(b.title || 'Untitled vibe').slice(0, 100);
+    const description = String(b.description || '').slice(0, 2000);
+    const category = String(b.category || 'Other').slice(0, 30);
+    const type = b.type === 'short' ? 'short' : 'video';
+
+    /* fetch video info from Bunny (thumbnail, duration) */
+    let thumbUrl = null;
+    let duration = String(b.duration || '').slice(0, 10);
+    try {
+      const bv = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + guid, { headers: { AccessKey: BUNNY_KEY } });
+      if (bv.ok) {
+        const info = await bv.json();
+        if (info.length) duration = Math.floor(info.length / 60) + ':' + String(Math.floor(info.length % 60)).padStart(2, '0');
+        if (info.thumbnailFileName) thumbUrl = 'https://vz-' + BUNNY_LIBRARY + '.b-cdn.net/' + guid + '/' + info.thumbnailFileName;
+      }
+    } catch (e) {}
+
+    const embedUrl = 'https://iframe.mediadelivery.net/' + BUNNY_LIBRARY + '/' + guid;
+
+    await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes,store)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'bunny')`,
+      [guid, title, description, category, type, duration, uploader, 'bunny:'+guid, null, embedUrl, thumbUrl, delKey, 1, '[0]']);
+
+    try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [uploader]); } catch (e) {}
+    res.status(201).json({ id: guid, video_url: embedUrl, thumb_url: thumbUrl, del_key: delKey, parts: 1, store: 'bunny' });
+  } catch (e) {
+    console.error('bunny publish error:', e.message);
+    res.status(500).json({ error: 'publish failed' });
+  }
+});
+
 /* crash shields: log async errors instead of letting them kill the process */
 process.on('unhandledRejection', e => console.error('unhandled rejection:', (e && e.message) || e));
 process.on('uncaughtException', e => console.error('uncaught exception:', (e && e.message) || e));
@@ -187,6 +237,7 @@ async function migrate() {
   await q(`alter table videos add column if not exists parts int default 1`);
   await q(`alter table videos add column if not exists sizes jsonb default '[]'`);
   await q(`alter table videos add column if not exists store text default 'sb'`);
+  await q(`alter table videos add column if not exists bunny_guid text`);
   await q(`alter table videos add column if not exists merge_state text default 'idle'`);
   await q(`create table if not exists users (
     username text primary key,
