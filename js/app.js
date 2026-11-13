@@ -25,7 +25,8 @@
   function runCleanups() { cleanups.forEach(f => { try { f(); } catch (e) {} }); cleanups = []; }
 
   /* ═══════════ API ═══════════ */
-  const API_BASE = (function(){ try { return localStorage.getItem('yv_api_base') || 'https://yourvibe-api-wgyk.onrender.com'; } catch(e){ return 'https://yourvibe-api-wgyk.onrender.com'; } })();
+  /* the API serves the website itself → same origin (no hardcoded URLs) */
+  const API_BASE = (function(){ try { const saved = localStorage.getItem('yv_api_base'); if (saved) return saved; } catch(e){} return ''; })();
 
   async function api(path, opts) {
     const headers = Object.assign({}, (opts && opts.headers) || {});
@@ -526,6 +527,13 @@
     const src = srcOf(v); // multi-part videos stream through the API as one file
     if (!src) return '<div class="player error-box">⚠️ Video unavailable</div>';
     const vert = v.type === 'short';
+    /* Bunny CDN videos play through Bunny's own embed player (HLS adaptive) */
+    if (v.store === 'bunny' || /iframe\.mediadelivery\.net/.test(src)) {
+      const embed = src + '?autoplay=true&preload=true';
+      return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer">'
+        + '<iframe class="bunny-frame" src="' + embed + '" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen frameborder="0" style="width:100%;' + (vert ? 'aspect-ratio:9/16;height:auto;' : 'aspect-ratio:16/9;') + 'border:0;background:#000"></iframe>'
+        + '</div>';
+    }
     return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer">'
       + '<video id="yvVideo" data-vid="' + v.id + '" src="' + src + '" playsinline ' + (v.thumb_url ? 'poster="' + v.thumb_url + '" ' : '') + '></video>'
       + '<div class="v-spin" id="yvSpin"><i></i></div>'
@@ -588,7 +596,9 @@
 
   function initPlayer() {
     const P = $('#yvPlayer'); if (!P) return;
-    const V = $('#yvVideo'), big = $('#yvBig'), playB = $('#yvPlayB'), muteB = $('#yvMute'),
+    const V = $('#yvVideo');
+    if (!V) return; // bunny iframe player — Bunny provides its own controls
+    const big = $('#yvBig'), playB = $('#yvPlayB'), muteB = $('#yvMute'),
       vol = $('#yvVol'), timeEl = $('#yvTime'), seek = $('#yvSeek'), fill = $('#yvFill'), full = $('#yvFull');
 
     /* YouTube-style buffering spinner */
