@@ -258,6 +258,7 @@ async function migrate() {
   await q(`alter table videos add column if not exists sizes jsonb default '[]'`);
   await q(`alter table videos add column if not exists store text default 'sb'`);
   await q(`alter table videos add column if not exists bunny_guid text`);
+  await q(`update videos set bunny_guid = replace(video_path, 'bunny:', '') where store = 'bunny' and bunny_guid is null`);
   await q(`alter table videos add column if not exists merge_state text default 'idle'`);
   await q(`create table if not exists users (
     username text primary key,
@@ -1134,7 +1135,8 @@ app.get('/api/videos/:id/playurl', async (req, res) => {
     if (!BUNNY_LIBRARY || !BUNNY_KEY) return res.json({ play: row.video_url, thumb: row.thumb_url });
 
     let host = null, dur = null;
-    const bv = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + row.bunny_guid, { headers: { AccessKey: BUNNY_KEY } });
+    const bg = row.bunny_guid || (row.video_path || '').replace('bunny:', '');
+    const bv = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + bg, { headers: { AccessKey: BUNNY_KEY } });
     if (bv.ok) {
       const info = await bv.json();
       if (info.thumbnailUrl) host = new URL(info.thumbnailUrl).hostname;
