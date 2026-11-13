@@ -14,6 +14,6 @@ jobs:
       - name: Ping for 4 minutes
         run: |
           for i in 1 2 3 4; do
-            curl -sf -m 120 https://yourvibe-api.onrender.com/api/health || true
+            curl -sf -m 120 https://yourvibe-9uqv.onrender.com/api/health || true
             sleep 55
           done
