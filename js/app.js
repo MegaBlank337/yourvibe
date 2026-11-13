@@ -591,21 +591,36 @@
     commentsHTML(v).then(html => { const slot = $('#comments-slot'); if (slot) slot.outerHTML = html; });
     loadPoll(v.id);
 
-    /* bunny video: resolve direct CDN URL (with retry while Bunny encodes) */
+    /* bunny video: resolve CDN URLs, play via HLS (adaptive — instant start) */
     if (v.store === 'bunny' || /iframe\.mediadelivery\.net/.test(srcOf(v) || '')) {
       (async () => {
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < 40; i++) {
           try {
             const s = await api('/api/videos/' + v.id + '/playurl');
-            if (s.play && !/iframe\.mediadelivery\.net/.test(s.play)) {
+            if (s.play && !/iframe\.mediadelivery/.test(s.play)) {
+              s.hls = new URL(s.play).origin + '/' + v.id + '/playlist.m3u8';
+            }
+            if (s.hls) {
               const P = $('#yvPlayer');
               if (!P || !P.dataset.bunny) return; // user navigated away
               const fresh = byId(v.id) || v;
-              fresh.video_url = s.play;
               if (s.thumb) fresh.thumb_url = s.thumb;
               P.innerHTML = playerHTML(fresh).replace('id="yvPlayer"', 'id="yvPlayer" data-bunny-done');
-              if (s.thumb && P.parentElement) { /* refresh thumb in page */ }
-              initPlayer();
+              const nv = $('#yvVideo');
+              if (nv && window.Hls && Hls.isSupported()) {
+                const hls = new Hls({ maxBufferLength: 30, startLevel: 0 });
+                hls.loadSource(s.hls);
+                hls.attachMedia(nv);
+                cleanups.push(() => hls.destroy());
+                nv.play().catch(() => {});
+                return;
+              }
+              if (nv) { /* Safari / no hls.js: MP4 fallback + native HLS */
+                nv.src = (window.Hls && !Hls.isSupported() && nv.canPlayType('application/vnd.apple.mpegurl')) ? s.hls : s.play;
+                initPlayer();
+                nv.play().catch(() => {});
+                return;
+              }
               return;
             }
           } catch (e) {}
