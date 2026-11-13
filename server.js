@@ -78,9 +78,9 @@ app.post('/api/videos/bunny', async (req, res) => {
 
     const embedUrl = 'https://iframe.mediadelivery.net/' + BUNNY_LIBRARY + '/' + guid;
 
-    await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes,store)
-             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'bunny')`,
-      [guid, title, description, category, type, duration, uploader, 'bunny:'+guid, null, embedUrl, null, delKey, 1, '[0]']);
+    await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes,store,bunny_guid)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'bunny',$15)`,
+      [guid, title, description, category, type, duration, uploader, 'bunny:'+guid, null, embedUrl, null, delKey, 1, '[0]', guid]);
 
     try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [uploader]); } catch (e) {}
     res.status(201).json({ id: guid, video_url: embedUrl, thumb_url: null, del_key: delKey, parts: 1, store: 'bunny' });
@@ -1070,7 +1070,14 @@ app.delete('/api/videos/:id', async (req, res) => {
     metaCache.delete(req.params.id);
     await q('delete from videos where id = $1', [req.params.id]); // cascades comments
 
-    if (row.store === 'gh' && ghMode()) {
+    if (row.store === 'bunny' && BUNNY_LIBRARY && BUNNY_KEY) {
+      const bg = row.bunny_guid || (row.video_path || '').replace('bunny:', '');
+      if (bg) {
+        await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + bg, {
+          method: 'DELETE', headers: { AccessKey: BUNNY_KEY }
+        }).catch(() => {});
+      }
+    } else if (row.store === 'gh' && ghMode()) {
       /* delete the whole release + its git tag */
       const tag = 'v-' + req.params.id;
       const rel = await ghApi(`/repos/${GH_REPO}/releases/tags/${tag}`);
