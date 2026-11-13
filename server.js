@@ -95,10 +95,12 @@ app.post('/api/videos/bunny', async (req, res) => {
           if (!bv.ok) continue;
           const info = await bv.json();
           if (info.thumbnailUrl) {
+            const host = new URL(info.thumbnailUrl).hostname;
             const dur = info.length ? Math.floor(info.length / 60) + ':' + String(Math.floor(info.length % 60)).padStart(2, '0') : duration;
-            await q('update videos set thumb_url = $2, duration = $3 where id = $1', [guid, info.thumbnailUrl, dur]);
+            const play = 'https://' + host + '/' + guid + '/play_720p.mp4';
+            await q('update videos set thumb_url = $2, duration = $3, video_url = $4 where id = $1', [guid, info.thumbnailUrl, dur, play]);
             metaCache.delete(guid);
-            console.log('bunny thumbnail ready:', guid);
+            console.log('bunny ready:', guid, '→', play);
             return;
           }
         } catch (e) {}
@@ -1120,6 +1122,36 @@ async function pollFor(videoId, req) {
   }
   return { id: p.id, question: p.question, options, counts: tally, total: tally.reduce((a, b) => a + b, 0), myVote };
 }
+
+
+/* resolve the direct playable URL for a bunny video (live from Bunny API) */
+app.get('/api/videos/:id/playurl', async (req, res) => {
+  try {
+    const r = await q('select video_url, thumb_url, bunny_guid, store from videos where id = $1', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    const row = r.rows[0];
+    if (row.store !== 'bunny') return res.json({ play: row.video_url, thumb: row.thumb_url });
+    if (!BUNNY_LIBRARY || !BUNNY_KEY) return res.json({ play: row.video_url, thumb: row.thumb_url });
+
+    let host = null, dur = null;
+    const bv = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + row.bunny_guid, { headers: { AccessKey: BUNNY_KEY } });
+    if (bv.ok) {
+      const info = await bv.json();
+      if (info.thumbnailUrl) host = new URL(info.thumbnailUrl).hostname;
+      if (info.length) dur = Math.floor(info.length / 60) + ':' + String(Math.floor(info.length % 60)).padStart(2, '0');
+    }
+    if (host) {
+      const play = 'https://' + host + '/' + row.bunny_guid + '/play_720p.mp4';
+      const thumb = row.thumb_url || ('https://' + host + '/' + row.bunny_guid + '/thumbnail.jpg');
+      const durFinal = dur || null;
+      await q('update videos set video_url = $2, thumb_url = $3, duration = coalesce($4, duration) where id = $1', [req.params.id, play, thumb, durFinal]);
+      metaCache.delete(req.params.id);
+      return res.json({ play, thumb });
+    }
+    /* still encoding — return the iframe so the page can poll again */
+    return res.json({ processing: true, play: row.video_url, thumb: row.thumb_url });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
 
 app.get('/api/videos/:id/poll', async (req, res) => {
   try { res.json(await pollFor(req.params.id, req)); } catch (e) { res.json(null); }
