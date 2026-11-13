@@ -33,6 +33,15 @@ try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,PATCH,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Key, X-Auth, X-Upload-Offset');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+app.use(express.json({ limit: '1mb' }));
+
 /* ── Bunny Stream config ── */
 const BUNNY_LIBRARY = process.env.BUNNY_LIBRARY_ID || '';
 const BUNNY_KEY = process.env.BUNNY_API_KEY || '';
@@ -162,15 +171,6 @@ async function ghPutAsset(tag, name, buffer, ctype) {
 }
 
 /* ── CORS (static site calls this API cross-origin) ── */
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,PATCH,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Key, X-Auth, X-Upload-Offset');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
-  next();
-});
-app.use(express.json({ limit: '1mb' }));
-
 /* ── Postgres (Supabase) with auto-reconnect ── */
 let migrated = false;
 let DB_CFG = null;
