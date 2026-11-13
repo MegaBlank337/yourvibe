@@ -604,6 +604,7 @@
               const P = $('#yvPlayer');
               if (!P || !P.dataset.bunny) return; // user navigated away
               const fresh = byId(v.id) || v;
+              fresh.video_url = s.play;
               if (s.thumb) fresh.thumb_url = s.thumb;
               P.innerHTML = playerHTML(fresh).replace('id="yvPlayer"', 'id="yvPlayer" data-bunny-done');
               const nv = $('#yvVideo');
