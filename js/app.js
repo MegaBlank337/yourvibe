@@ -527,11 +527,10 @@
     const src = srcOf(v); // multi-part videos stream through the API as one file
     if (!src) return '<div class="player error-box">⚠️ Video unavailable</div>';
     const vert = v.type === 'short';
-    /* Bunny CDN videos play through Bunny's own embed player (HLS adaptive) */
+    /* Bunny CDN videos: resolve the direct MP4 from the CDN, then play natively */
     if (v.store === 'bunny' || /iframe\.mediadelivery\.net/.test(src)) {
-      const embed = src + '?autoplay=true&preload=true';
-      return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer">'
-        + '<iframe class="bunny-frame" src="' + embed + '" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen frameborder="0" style="width:100%;' + (vert ? 'aspect-ratio:9/16;height:auto;' : 'aspect-ratio:16/9;') + 'border:0;background:#000"></iframe>'
+      return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer" data-bunny="' + v.id + '">'
+        + '<div class="loading-box" style="padding:60px 20px"><div class="spinner"></div><p>CDN is preparing your video — a few seconds…</p></div>'
         + '</div>';
     }
     return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer">'
@@ -591,6 +590,35 @@
 
     commentsHTML(v).then(html => { const slot = $('#comments-slot'); if (slot) slot.outerHTML = html; });
     loadPoll(v.id);
+
+    /* bunny video: resolve direct CDN URL (with retry while Bunny encodes) */
+    if (v.store === 'bunny' || /iframe\.mediadelivery\.net/.test(srcOf(v) || '')) {
+      (async () => {
+        for (let i = 0; i < 30; i++) {
+          try {
+            const s = await api('/api/videos/' + v.id + '/playurl');
+            if (s.play && !/iframe\.mediadelivery\.net/.test(s.play)) {
+              const P = $('#yvPlayer');
+              if (!P || !P.dataset.bunny) return; // user navigated away
+              const fresh = byId(v.id) || v;
+              fresh.video_url = s.play;
+              if (s.thumb) fresh.thumb_url = s.thumb;
+              P.innerHTML = playerHTML(fresh).replace('id="yvPlayer"', 'id="yvPlayer" data-bunny-done');
+              if (s.thumb && P.parentElement) { /* refresh thumb in page */ }
+              initPlayer();
+              return;
+            }
+          } catch (e) {}
+          await new Promise(r => setTimeout(r, 3000));
+          const P = $('#yvPlayer');
+          if (!P || !P.dataset.bunny) return;
+        }
+        const P = $('#yvPlayer');
+        if (P && P.dataset.bunny) P.innerHTML = '<div class="error-box">⏳ Still encoding on the CDN — refresh in a minute</div>';
+      })();
+      return;
+    }
+
     initPlayer();
   }
 
