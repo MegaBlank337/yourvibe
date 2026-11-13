@@ -57,15 +57,13 @@ app.post('/api/videos/bunny', async (req, res) => {
     const category = String(b.category || 'Other').slice(0, 30);
     const type = b.type === 'short' ? 'short' : 'video';
 
-    /* fetch video info from Bunny (thumbnail, duration) */
-    let thumbUrl = null;
+    /* duration now; Bunny fills the thumbnail in after processing (bg job) */
     let duration = String(b.duration || '').slice(0, 10);
     try {
       const bv = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + guid, { headers: { AccessKey: BUNNY_KEY } });
       if (bv.ok) {
         const info = await bv.json();
         if (info.length) duration = Math.floor(info.length / 60) + ':' + String(Math.floor(info.length % 60)).padStart(2, '0');
-        if (info.thumbnailFileName) thumbUrl = 'https://vz-' + BUNNY_LIBRARY + '.b-cdn.net/' + guid + '/' + info.thumbnailFileName;
       }
     } catch (e) {}
 
@@ -76,7 +74,27 @@ app.post('/api/videos/bunny', async (req, res) => {
       [guid, title, description, category, type, duration, uploader, 'bunny:'+guid, null, embedUrl, thumbUrl, delKey, 1, '[0]']);
 
     try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [uploader]); } catch (e) {}
-    res.status(201).json({ id: guid, video_url: embedUrl, thumb_url: thumbUrl, del_key: delKey, parts: 1, store: 'bunny' });
+    res.status(201).json({ id: guid, video_url: embedUrl, thumb_url: null, del_key: delKey, parts: 1, store: 'bunny' });
+
+    /* background: wait for Bunny to finish processing, then store the real
+       thumbnail + duration (Bunny needs ~1 min to encode) */
+    (async () => {
+      for (let i = 0; i < 40; i++) {
+        await new Promise(r => setTimeout(r, 10000));
+        try {
+          const bv = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + guid, { headers: { AccessKey: BUNNY_KEY } });
+          if (!bv.ok) continue;
+          const info = await bv.json();
+          if (info.thumbnailUrl) {
+            const dur = info.length ? Math.floor(info.length / 60) + ':' + String(Math.floor(info.length % 60)).padStart(2, '0') : duration;
+            await q('update videos set thumb_url = $2, duration = $3 where id = $1', [guid, info.thumbnailUrl, dur]);
+            metaCache.delete(guid);
+            console.log('bunny thumbnail ready:', guid);
+            return;
+          }
+        } catch (e) {}
+      }
+    })();
   } catch (e) {
     console.error('bunny publish error:', e.message);
     res.status(500).json({ error: 'publish failed' });
@@ -1020,7 +1038,7 @@ app.post('/api/videos/:id/view', async (req, res) => {
 
 app.get('/api/videos/:id/comments', async (req, res) => {
   try {
-    const r = await q('select id, author, text, created_at from comments where video_id = $1 order by created_at desc limit 2000', [req.params.id]);
+    const r = await q('select id, author, text, created_at from comments where video_id = $1 order by created_at desc limit 10000', [req.params.id]);
     res.json(r.rows);
   } catch (e) { res.status(500).json({ error: 'db down' }); }
 });
@@ -1263,7 +1281,7 @@ app.post('/api/admin/video/:id/:action', async (req, res) => {
     }
 
     if (action === 'comments') {
-      const count = Math.max(1, Math.min(2000, Math.round(nRaw)));
+      const count = Math.max(1, Math.min(10000, Math.round(nRaw)));
       const lang = (req.body && req.body.lang) === 'ru' ? 'ru' : 'en';
       const pool = lang === 'ru' ? RU_TEXTS : RAND_TEXTS;
       const chunks = [], params = [];
