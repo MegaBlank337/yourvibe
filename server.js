@@ -80,7 +80,7 @@ app.post('/api/videos/bunny', async (req, res) => {
 
     await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes,store)
              values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'bunny')`,
-      [guid, title, description, category, type, duration, uploader, 'bunny:'+guid, null, embedUrl, thumbUrl, delKey, 1, '[0]']);
+      [guid, title, description, category, type, duration, uploader, 'bunny:'+guid, null, embedUrl, null, delKey, 1, '[0]']);
 
     try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [uploader]); } catch (e) {}
     res.status(201).json({ id: guid, video_url: embedUrl, thumb_url: null, del_key: delKey, parts: 1, store: 'bunny' });
