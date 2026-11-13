@@ -97,7 +97,7 @@ app.post('/api/videos/bunny', async (req, res) => {
           if (info.thumbnailUrl) {
             const host = new URL(info.thumbnailUrl).hostname;
             const dur = info.length ? Math.floor(info.length / 60) + ':' + String(Math.floor(info.length % 60)).padStart(2, '0') : duration;
-            const play = 'https://' + host + '/' + guid + '/play_720p.mp4';
+            const play = 'https://' + host + '/' + guid + '/play_' + bestRendition(info.availableResolutions) + '.mp4';
             await q('update videos set thumb_url = $2, duration = $3, video_url = $4 where id = $1', [guid, info.thumbnailUrl, dur, play]);
             metaCache.delete(guid);
             console.log('bunny ready:', guid, '→', play);
@@ -506,7 +506,7 @@ const clientIp = req => String((req.headers && req.headers['x-forwarded-for']) |
 /* ONE round-trip boot: feed + creators + avatars + announcement + account */
 app.get('/api/boot', async (req, res) => {
   try {
-    const vids = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,created_at
+    const vids = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,store,created_at
                           from videos order by created_at desc limit 200`);
     let creators = {};
     try {
@@ -684,7 +684,7 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/api/videos', async (req, res) => {
   try {
-    const r = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,created_at
+    const r = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,store,created_at
                        from videos order by created_at desc limit 200`);
     res.json(r.rows.map(row => Object.assign({}, row, {
       views: num(row.views), likes: num(row.likes),
@@ -1125,6 +1125,15 @@ async function pollFor(videoId, req) {
 }
 
 
+
+/* best available MP4 rendition for a bunny video */
+function bestRendition(available) {
+  const list = String(available || '').toLowerCase();
+  const order = ['1080p', '720p', '480p', '360p', '240p'];
+  const found = order.find(x => list.includes(x));
+  return found || '360p';
+}
+
 /* resolve the direct playable URL for a bunny video (live from Bunny API) */
 app.get('/api/videos/:id/playurl', async (req, res) => {
   try {
@@ -1138,17 +1147,18 @@ app.get('/api/videos/:id/playurl', async (req, res) => {
     const bg = row.bunny_guid || (row.video_path || '').replace('bunny:', '');
     const bv = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + bg, { headers: { AccessKey: BUNNY_KEY } });
     if (bv.ok) {
-      const info = await bv.json();
+      info = await bv.json();
       if (info.thumbnailUrl) host = new URL(info.thumbnailUrl).hostname;
       if (info.length) dur = Math.floor(info.length / 60) + ':' + String(Math.floor(info.length % 60)).padStart(2, '0');
     }
     if (host) {
-      const play = 'https://' + host + '/' + row.bunny_guid + '/play_720p.mp4';
+      const play = 'https://' + host + '/' + row.bunny_guid + '/play_' + bestRendition(info ? info.availableResolutions : '') + '.mp4';
+      const hls = 'https://' + host + '/' + row.bunny_guid + '/playlist.m3u8';
       const thumb = row.thumb_url || ('https://' + host + '/' + row.bunny_guid + '/thumbnail.jpg');
       const durFinal = dur || null;
       await q('update videos set video_url = $2, thumb_url = $3, duration = coalesce($4, duration) where id = $1', [req.params.id, play, thumb, durFinal]);
       metaCache.delete(req.params.id);
-      return res.json({ play, thumb });
+      return res.json({ play, hls, thumb });
     }
     /* still encoding — return the iframe so the page can poll again */
     return res.json({ processing: true, play: row.video_url, thumb: row.thumb_url });
