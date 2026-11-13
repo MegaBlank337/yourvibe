@@ -551,10 +551,14 @@
 
   async function viewWatch(id) {
     if (!await ensureVideos()) return;
-    const v = byId(id);
+    let v = byId(id);
     if (!v) {
-      main.innerHTML = emptyHTML('👻', 'Video not found', 'It may have been deleted.', '<a class="btn-neon" href="#/home">Back home</a>');
-      return;
+      /* the cache may be stale (fresh upload on another device) — reload once */
+      try { await loadVideos(); v = byId(id); } catch (e) {}
+      if (!v) {
+        main.innerHTML = emptyHTML('👻', 'Video not found', 'It may have been deleted.', '<a class="btn-neon" href="#/home">Back home</a>');
+        return;
+      }
     }
     bumpView(v);
     addHistory(id);
@@ -1834,7 +1838,7 @@
     loadVideos().then(() => {
       if (feedSig() !== sig) {
         const p = location.hash.slice(1) || '/';
-        if (/^\/?$|\/home|\/subscriptions|\/library|\/shorts/.test(p)) navigate();
+        if (/^\/?$|\/home|\/subscriptions|\/library|\/shorts|\/watch/.test(p)) navigate();
       }
     }).catch(() => {});
   }
