@@ -527,8 +527,8 @@
     const src = srcOf(v); // multi-part videos stream through the API as one file
     if (!src) return '<div class="player error-box">⚠️ Video unavailable</div>';
     const vert = v.type === 'short';
-    /* Bunny CDN videos: resolve the direct MP4 from the CDN, then play natively */
-    if (v.store === 'bunny' || /iframe\.mediadelivery\.net/.test(src)) {
+    /* Bunny CDN videos: placeholder only while Bunny hasn't given us the file */
+    if (/iframe\.mediadelivery\.net/.test(src)) {
       return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer" data-bunny="' + v.id + '">'
         + '<div class="loading-box" style="padding:60px 20px"><div class="spinner"></div><p>CDN is preparing your video — a few seconds…</p></div>'
         + '</div>';
