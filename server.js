@@ -304,6 +304,8 @@ async function migrate() {
   await q(`alter table users add column if not exists banner_url text`);
   await q(`alter table users add column if not exists bio text`);
   await q(`alter table creators add column if not exists verified boolean default false`);
+  await q(`alter table users add column if not exists tokens jsonb default '[]'`);
+  await q(`update users set tokens = to_jsonb(array[token]) where token is not null and tokens = '[]'::jsonb`);
   await q(`alter table creators add column if not exists color text`);
   await q(`create table if not exists notifications (
     id bigserial primary key,
@@ -351,7 +353,7 @@ async function authUser(req) {
   const token = req.get('x-auth');
   if (!token || !/^[a-f0-9]{20,80}$/.test(token)) return null;
   try {
-    const r = await q('select username from users where token = $1', [token]);
+    const r = await q('select username from users where tokens @> to_jsonb(array[$1])', [token]);
     return r.rows.length ? r.rows[0].username : null;
   } catch (e) { return null; }
 }
@@ -604,7 +606,7 @@ app.post('/api/auth/signup', async (req, res) => {
     if (password.length < 4) return res.status(400).json({ error: 'password must be at least 4 characters' });
     const token = crypto.randomBytes(24).toString('hex');
     try {
-      await q('insert into users (username, pass_hash, token) values ($1,$2,$3)', [username, hashPass(password), token]);
+      await q('insert into users (username, pass_hash, tokens) values ($1,$2,to_jsonb(array[$3]))', [username, hashPass(password), token]);
     } catch (e) {
       if (String(e.message || '').includes('duplicate key')) return res.status(409).json({ error: 'that username is taken' });
       throw e;
@@ -622,7 +624,7 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'wrong username or password' });
     }
     const token = crypto.randomBytes(24).toString('hex');
-    await q('update users set token = $1 where username = $2', [token, username]);
+    await q('update users set tokens = coalesce(tokens, \'[]\'::jsonb) || to_jsonb(array[$1]) where username = $2', [token, username]);
     res.json({ token, username });
   } catch (e) { res.status(500).json({ error: 'login failed' }); }
 });
@@ -688,7 +690,8 @@ app.get('/api/avatars', async (req, res) => {
 
 app.post('/api/auth/logout', async (req, res) => {
   const username = await authUser(req);
-  if (username) await q('update users set token = null where username = $1', [username]).catch(() => {});
+  const token = req.get('x-auth');
+  if (username) await q('update users set tokens = (select coalesce(jsonb_agg(el), \'[]\'::jsonb) from jsonb_array_elements_text(coalesce(tokens, \'[]\'::jsonb)) el where el <> $1) where username = $1', [token]).catch(() => {});
   res.json({ ok: true });
 });
 
