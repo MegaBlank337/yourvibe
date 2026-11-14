@@ -304,6 +304,7 @@ async function migrate() {
   await q(`alter table users add column if not exists banner_url text`);
   await q(`alter table users add column if not exists bio text`);
   await q(`alter table creators add column if not exists verified boolean default false`);
+  await q(`alter table creators add column if not exists color text`);
   await q(`create table if not exists notifications (
     id bigserial primary key,
     text text not null,
@@ -553,7 +554,7 @@ app.get('/api/boot', async (req, res) => {
     const verifiedNames = [];
     try {
       await q('insert into creators (name, subs) select distinct uploader, 0 from videos on conflict (name) do nothing');
-      const cr = await q('select name, subs, verified from creators');
+      const cr = await q('select name, subs, verified, color from creators');
       cr.rows.forEach(r => { creators[r.name] = num(r.subs); if (r.verified) verifiedNames.push(r.name); });
     } catch (e) {}
     const avatars = {};
@@ -589,7 +590,7 @@ app.get('/api/boot', async (req, res) => {
       videos: vids.rows.map(row => Object.assign({}, row, {
         views: num(row.views), likes: num(row.likes), parts: Math.max(1, Number(row.parts) || 1),
       })),
-      creators, avatars, announcement, me, verified: verifiedNames, notifications,
+      creators, colors, avatars, announcement, me, verified: verifiedNames, notifications,
     });
   } catch (e) { res.status(500).json({ error: 'boot failed' }); }
 });
@@ -649,6 +650,13 @@ app.post('/api/auth/profile', async (req, res) => {
       await sbPut(p, Buffer.from(String(b.avatar).split(',')[1], 'base64'), 'image/jpeg');
       await q('update users set avatar_url = $2 where username = $1', [username, pubUrl(p)]);
       out.avatar_url = pubUrl(p);
+    }
+    if (b.color !== undefined) {
+      const color = String(b.color || '').slice(0, 20);
+      try {
+        await q('update creators set color = $2 where name = $1', [username, color || null]);
+        out.color = color || null;
+      } catch (e) {}
     }
     if (b.bio !== undefined) {
       const bio = String(b.bio || '').slice(0, 1000);
