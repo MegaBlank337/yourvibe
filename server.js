@@ -691,7 +691,7 @@ app.get('/api/avatars', async (req, res) => {
 app.post('/api/auth/logout', async (req, res) => {
   const username = await authUser(req);
   const token = req.get('x-auth');
-  if (username) await q('update users set tokens = (select coalesce(jsonb_agg(el), \'[]\'::jsonb) from jsonb_array_elements_text(coalesce(tokens, \'[]\'::jsonb)) el where el <> $1) where username = $1', [token]).catch(() => {});
+  if (username) await q('update users set tokens = (select coalesce(jsonb_agg(el), \'[]\'::jsonb) from jsonb_array_elements_text(coalesce(tokens, \'[]\'::jsonb)) el where el <> $2) where username = $1', [username, token]).catch(() => {});
   res.json({ ok: true });
 });
 
