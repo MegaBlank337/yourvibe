@@ -66,7 +66,18 @@ app.post('/api/videos/bunny', async (req, res) => {
     const category = String(b.category || 'Other').slice(0, 30);
     const type = b.type === 'short' ? 'short' : 'video';
 
-    /* duration now; Bunny fills the thumbnail in after processing (bg job) */
+    /* client thumbnail (auto-captured or custom) → stored instantly */
+    let thumbUrl = null;
+    const thumbData = String(b.thumb || '');
+    if (thumbData.startsWith('data:image/') && thumbData.length < 2000000) {
+      try {
+        const tp = 'thumbs/' + guid + '.jpg';
+        await sbPut(tp, Buffer.from(thumbData.split(',')[1], 'base64'), 'image/jpeg');
+        thumbUrl = pubUrl(tp);
+      } catch (e) { console.error('thumb store failed:', e.message); }
+    }
+
+    /* duration now; Bunny fills its own thumbnail in later (bg job, only if client sent none) */
     let duration = String(b.duration || '').slice(0, 10);
     try {
       const bv = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + guid, { headers: { AccessKey: BUNNY_KEY } });
@@ -80,10 +91,31 @@ app.post('/api/videos/bunny', async (req, res) => {
 
     await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes,store,bunny_guid)
              values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'bunny',$15)`,
-      [guid, title, description, category, type, duration, uploader, 'bunny:'+guid, null, embedUrl, null, delKey, 1, '[0]', guid]);
+      [guid, title, description, category, type, duration, uploader, 'bunny:'+guid, null, embedUrl, thumbUrl, delKey, 1, '[0]', guid]);
 
     try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [uploader]); } catch (e) {}
-    res.status(201).json({ id: guid, video_url: embedUrl, thumb_url: null, del_key: delKey, parts: 1, store: 'bunny' });
+
+    /* bg: if no client thumbnail, pick up Bunny's generated one when ready */
+    if (!thumbUrl) {
+      (async () => {
+        for (let i = 0; i < 40; i++) {
+          await new Promise(r => setTimeout(r, 10000));
+          try {
+            const bv = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + guid, { headers: { AccessKey: BUNNY_KEY } });
+            if (!bv.ok) continue;
+            const info = await bv.json();
+            if (info.thumbnailUrl) {
+              await q('update videos set thumb_url = $2 where id = $1 and thumb_url is null', [guid, info.thumbnailUrl]);
+              metaCache.delete(guid);
+              console.log('bunny thumbnail ready:', guid);
+              return;
+            }
+          } catch (e) {}
+        }
+      })();
+    }
+
+    res.status(201).json({ id: guid, video_url: embedUrl, thumb_url: thumbUrl, del_key: delKey, parts: 1, store: 'bunny' });
 
     /* background: wait for Bunny to finish processing, then store the real
        thumbnail + duration (Bunny needs ~1 min to encode) */
