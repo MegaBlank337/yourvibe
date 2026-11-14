@@ -319,9 +319,11 @@
       + '</div>';
   }
 
+  function watchHref(v) { return (v.store === 'live' && Number(v.parts) === 0) ? '#/live/' + v.id : '#/watch/' + v.id; }
+
   function cardHTML(v) {
     const up = upOf(v);
-    return '<a class="card" href="#/watch/' + v.id + '">'
+    return '<a class="card" href="' + watchHref(v) + '">'
       + thumbHTML(v)
       + '<div class="meta">' + avatarHTML(up, 36)
       + '<div class="meta-txt">'
@@ -333,7 +335,7 @@
 
   function relCardHTML(v) {
     const up = upOf(v);
-    return '<a class="compact-card" href="#/watch/' + v.id + '">'
+    return '<a class="compact-card" href="' + watchHref(v) + '">'
       + '<div class="thumb sm" style="--c1:' + up.colors[0] + ';--c2:' + up.colors[1] + '">'
       + (v.thumb_url ? '<img loading="lazy" src="' + thumbSrc(v) + '" alt="" onerror="this.style.display=\'none\'">' : '')
       + '<span class="thumb-ghost' + (v.thumb_url ? ' small' : '') + '">' + (v.type === 'short' ? '⚡' : '▶') + '</span>'
@@ -704,23 +706,82 @@
         + '<div id="comments-slot">' + loadingHTML() + '</div>'
         + '</div></div>';
 
-      let segI = 0;
+      /* not finalized yet — if the stream is still LIVE, jump to the live page */
+      if (!segs.length) {
+        try {
+          const pl = await api('/api/live/' + v.id + '/playlist');
+          if (pl && pl.status === 'live') { location.hash = '#/live/' + v.id; return; }
+        } catch (e) {}
+        main.innerHTML = '<div class="page"><div class="empty"><div class="empty-ico">📡</div><h3>VOD unavailable</h3><p>This stream has no recording.</p></div></div>';
+        return;
+      }
+
       const nv = $('#yvVideo');
       const segLabel = $('#liveSeg');
-      const loadSeg = i => {
-        segI = Math.max(0, Math.min(segs.length - 1, i));
-        nv.src = segs[segI];
-        if (segLabel) segLabel.textContent = 'Segment ' + (segI + 1) + '/' + segs.length;
+      /* minimal controls used by both paths */
+      const bindMini = () => {
+        const pb = $('#yvPlayB'), fb = $('#yvFull'), P = $('#yvPlayer');
+        if (pb) pb.onclick = () => { if (nv.paused) nv.play().catch(() => {}); else nv.pause(); };
+        nv.addEventListener('play', () => { if (pb) pb.textContent = '⏸'; });
+        nv.addEventListener('pause', () => { if (pb) pb.textContent = '▶'; });
+        if (fb && P) fb.onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else if (P.requestFullscreen) P.requestFullscreen().catch(() => {}); };
       };
-      /* broken segment (404/decode fail) → skip forward automatically */
-      nv.addEventListener('error', () => {
-        if (segI < segs.length - 1) { loadSeg(segI + 1); nv.play().catch(() => {}); }
-      });
-      loadSeg(0);
-      nv.addEventListener('ended', () => {
-        if (segI < segs.length - 1) { loadSeg(segI + 1); nv.play().catch(() => {}); }
-      });
-      initPlayer();
+      bindMini();
+
+      /* ── new-format VOD (raw chunks): ONE continuous webm via MediaSource —
+         gapless playback + a real seek bar. No more resets. ── */
+      const vmime = String(v.live_mime || '');
+      let usedMse = false;
+      if (vmime && window.MediaSource) { try { usedMse = MediaSource.isTypeSupported(vmime); } catch (e) {} }
+      if (usedMse) {
+        try {
+          const ms = new MediaSource();
+          nv.src = URL.createObjectURL(ms);
+          let sb = null, qi = 0, queue = [], fetching = false, retr = 0;
+          const step = () => {
+            if (!sb || sb.updating) return;
+            if (queue.length) { const b = queue.shift(); try { sb.appendBuffer(b); } catch (e) { vodSeq(); } return; }
+            if (fetching || qi >= segs.length) {
+              if (!fetching && qi >= segs.length) {
+                try { if (ms.readyState === 'open') ms.endOfStream(); } catch (e) {}
+                if (segLabel) segLabel.textContent = 'VOD · ' + segs.length + ' parts';
+                initPlayer(); // duration is finite now → seek bar works
+              }
+              return;
+            }
+            fetching = true;
+            fetch(segs[qi]).then(r => { if (!r.ok) throw new Error('http ' + r.status); return r.arrayBuffer(); })
+              .then(b => { queue.push(b); qi++; retr = 0; })
+              .catch(() => { if (++retr >= 3) { retr = 0; qi++; } })
+              .then(() => { fetching = false; step(); });
+          };
+          ms.addEventListener('sourceopen', () => {
+            try { sb = ms.addSourceBuffer(vmime); } catch (e) { vodSeq(); return; }
+            sb.mode = 'sequence';
+            sb.addEventListener('error', vodSeq);
+            step();
+          });
+          nv.play().catch(() => {});
+        } catch (e) { vodSeq(); }
+      } else vodSeq();
+
+      /* ── old-format VOD (header-prepended standalone files): sequential ── */
+      function vodSeq() {
+        let segI = 0;
+        const loadSeg = i => {
+          segI = Math.max(0, Math.min(segs.length - 1, i));
+          nv.src = segs[segI];
+          if (segLabel) segLabel.textContent = 'Segment ' + (segI + 1) + '/' + segs.length;
+        };
+        nv.addEventListener('error', () => {
+          if (segI < segs.length - 1) { loadSeg(segI + 1); nv.play().catch(() => {}); }
+        });
+        nv.addEventListener('ended', () => {
+          if (segI < segs.length - 1) { loadSeg(segI + 1); nv.play().catch(() => {}); }
+        });
+        loadSeg(0);
+        nv.play().catch(() => {});
+      }
 
       commentsHTML(v).then(html => { const slot = $('#comments-slot'); if (slot) slot.outerHTML = html; });
       return;
@@ -1486,9 +1547,69 @@
   document.addEventListener('click', e => {
     const btn = e.target.closest('#notifBtn');
     const panel = document.querySelector('#notifPanel');
+    const hbtn = e.target.closest('#helpBtn');
+    const hpanel = document.querySelector('#helpPanel');
     if (btn) { openNotifPanel(); return; }
+    if (hbtn) { openHelpPanel(); return; }
     if (panel && !panel.classList.contains('hide') && !e.target.closest('#notifPanel')) panel.classList.add('hide');
+    if (hpanel && !hpanel.classList.contains('hide') && !e.target.closest('#helpPanel')) hpanel.classList.add('hide');
   });
+
+  /* ═══════════ help chat (user ↔ YourVibe admin) ═══════════ */
+  let helpSeen = 0;
+  let lastAdminId = 0;
+  try { helpSeen = Number(localStorage.getItem('yv_help_seen') || 0); } catch (e) {}
+  function supportName() { return myName() || ('guest-' + voterTag()); }
+  function helpMsgHTML(m) {
+    const when = m.created_at ? timeAgo(Date.parse(m.created_at)) : '';
+    if (m.from_admin) {
+      return '<div class="help-msg admin"><div class="help-who">▶ YourVibe <span class="vrf-badge" title="Verified">✓</span></div><div class="help-txt">' + esc(m.text) + '</div><div class="help-time">' + when + '</div></div>';
+    }
+    return '<div class="help-msg me"><div class="help-who">' + esc(m.username) + '</div><div class="help-txt">' + esc(m.text) + '</div><div class="help-time">' + when + '</div></div>';
+  }
+  async function pollHelp() {
+    try {
+      const list = await api('/api/support?user=' + encodeURIComponent(supportName()));
+      list.forEach(m => { if (m.from_admin && m.id > lastAdminId) lastAdminId = m.id; });
+      const el = $('#helpList');
+      if (el && el.dataset.open === '1') {
+        el.innerHTML = list.length ? list.slice().reverse().map(helpMsgHTML).join('') : '<p class="muted-txt" style="padding:16px;text-align:center">Describe your problem — the admin will answer here 💌</p>';
+        el.scrollTop = el.scrollHeight;
+      }
+      const unread = list.filter(m => m.from_admin && m.id > helpSeen).length;
+      const cnt = $('#helpCount');
+      if (cnt) { cnt.textContent = unread || ''; cnt.style.display = unread ? 'grid' : 'none'; }
+    } catch (e) {}
+  }
+  function openHelpPanel() {
+    const panel = $('#helpPanel');
+    if (!panel) return;
+    panel.classList.toggle('hide');
+    const el = $('#helpList');
+    const np = $('#notifPanel');
+    if (panel.classList.contains('hide')) { if (el) el.dataset.open = '0'; return; }
+    if (np) np.classList.add('hide');
+    if (el) el.dataset.open = '1';
+    helpSeen = lastAdminId;
+    try { localStorage.setItem('yv_help_seen', String(helpSeen)); } catch (e) {}
+    pollHelp();
+    const inp = $('#helpText');
+    if (inp) setTimeout(() => inp.focus(), 100);
+  }
+  const helpForm = $('#helpForm');
+  if (helpForm) helpForm.onsubmit = async e => {
+    e.preventDefault();
+    const inp = $('#helpText');
+    const text = (inp.value || '').trim();
+    if (!text) return;
+    inp.value = '';
+    try {
+      await api('/api/support', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: supportName(), text }) });
+      pollHelp();
+    } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
+  };
+  setInterval(pollHelp, 8000);
+  setTimeout(pollHelp, 1200);
 
   /* ═══════════ announcements (admin → everyone) ═══════════ */
   let ANN = null;
@@ -1796,6 +1917,8 @@
       + '<div class="admin-row"><input type="text" id="adminNotifTo" maxlength="50" placeholder="to account (empty = everyone)"><span class="muted-txt" style="align-self:center;font-size:13px">leave empty = send to all</span></div>'
       + '<div class="admin-row"><input type="number" id="adminChatRate" min="1" max="60" placeholder="sec between comments"><button class="pill-btn" data-admin="chat-on">💬 Chat ON</button><button class="pill-btn danger" data-admin="chat-off">💬 OFF</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">clears every notification</span><button class="pill-btn danger" data-admin="notif-clear">🗑 Clear notifications</button></div>'
+      + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">user questions arrive here — open the chat</span><button class="pill-btn" data-admin="support-open">📨 Open support chat</button></div>'
+      + '<div class="admin-row" style="flex-direction:column;align-items:stretch" id="adminSupportRow"><div id="adminSupportList" class="adm-sup-list"><span class="muted-txt">Click “Open support chat” to load messages…</span></div><div style="display:flex;gap:8px;margin-top:8px"><input type="text" id="adminSupportTo" maxlength="50" placeholder="reply to (username)"><input type="text" id="adminSupportText" maxlength="500" placeholder="your reply — arrives in their 💬 panel"><button class="pill-btn" data-admin="support-reply">↩ Reply</button></div></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">create a poll for the selected video</span><button class="pill-btn" data-admin="poll">📊 Create poll</button></div>'
       + '</div>'
       + '<p class="muted-txt">Applies on the server — everyone sees it. Comments come from randomly generated accounts.</p>'
@@ -1803,7 +1926,14 @@
     document.body.appendChild(d);
 
     $('#adminClose').onclick = () => d.classList.add('hide');
-    d.addEventListener('click', e => { if (e.target === d) d.classList.add('hide'); });
+    d.addEventListener('click', e => {
+      if (e.target === d) d.classList.add('hide');
+      const r = e.target.closest('[data-sup-reply]');
+      if (r) {
+        const to = $('#adminSupportTo'); if (to) to.value = r.dataset.supReply || '';
+        const tx = $('#adminSupportText'); if (tx) tx.focus();
+      }
+    });
     $('#adminUnlock').onclick = () => {
       if ($('#adminPin').value === ADMIN_PIN) {
         try { sessionStorage.setItem('yv_admin', '1'); } catch (e) {}
@@ -1841,6 +1971,36 @@
   }
 
   async function adminAction(kind) {
+    if (kind === 'support-open') {
+      try {
+        const r = await fetch(API_BASE + '/api/support/all', { headers: { 'X-Admin-Key': ADMIN_KEY } });
+        const list = await r.json();
+        const el = $('#adminSupportList');
+        if (el) {
+          el.innerHTML = list.length ? list.slice().reverse().map(m =>
+            '<div class="adm-sup">' + (m.from_admin
+              ? '<b style="color:#39ff88">↩ admin → ' + esc(m.username) + '</b>: '
+              : '<b>' + esc(m.username) + '</b>: ')
+            + esc(m.text) + ' <span class="muted-txt">· ' + (m.created_at ? timeAgo(Date.parse(m.created_at)) : '') + '</span>'
+            + (m.from_admin ? '' : ' <button class="pill-btn" data-sup-reply="' + esc(m.username) + '" style="padding:1px 8px;font-size:11px">↩</button>')
+            + '</div>'
+          ).join('') : '<span class="muted-txt">No support messages yet — users write via the 💬 button in the header.</span>';
+        }
+      } catch (e) { toast('Failed to load support chat', '⚠️'); }
+      return;
+    }
+    if (kind === 'support-reply') {
+      const to = ($('#adminSupportTo') && $('#adminSupportTo').value || '').trim();
+      const text = ($('#adminSupportText') && $('#adminSupportText').value || '').trim();
+      if (!to || !text) { toast('Need username + reply text', '⚠️'); return; }
+      try {
+        await api('/api/support', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: to, text, fromAdmin: true }) });
+        const tx = $('#adminSupportText'); if (tx) tx.value = '';
+        toast('Reply sent to ' + to + ' 💌', '↩');
+        adminAction('support-open');
+      } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
     if (kind === 'chat-on' || kind === 'chat-off') {
       const rate = parseInt($('#adminChatRate') && $('#adminChatRate').value, 10) || 4;
       const enabled = kind === 'chat-on';
@@ -2101,7 +2261,7 @@
   function removeLiveBar() { const b = document.getElementById('liveBar'); if (b) b.remove(); }
 
   async function startBroadcast(stream, title, thumb, mime) {
-    const r = await api('/api/live/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, thumb }) });
+    const r = await api('/api/live/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, thumb, mime }) });
     liveStreamId = r.id; liveChunksSent = 0; liveEnding = false;
     UPLOADING = true; // block auto-update reloads while broadcasting
 
@@ -2296,9 +2456,6 @@
   async function viewLiveStream(id) {
     const ICE_VIEWER = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
     main.innerHTML = '<div class="page live-view-page"><div class="loading-box"><div class="spinner"></div><p>Connecting to the stream…</p></div></div>';
-    let segIdx = -1;
-    let ended = false;
-
     for (let i = 0; i < 120; i++) {
       let pl;
       try { pl = await api('/api/live/' + id + '/playlist'); } catch (e) { pl = { status: 'gone' }; }
@@ -2362,30 +2519,82 @@
       } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
     };
 
-    async function nextSeg() {
-      if (ended) { statusEl.textContent = 'Stream ended 🔴'; return; }
-      let pl;
-      try { pl = await api('/api/live/' + id + '/playlist'); } catch (e) { setTimeout(nextSeg, 3000); return; }
-      if (pl.status === 'gone') { statusEl.textContent = 'Stream ended'; return; }
-      ended = pl.status === 'ended';
-      const segs = pl.segs || [];
-      $('#liveTitleEl').textContent = pl.title || '';
-      $('#liveBroadEl').innerHTML = 'by ' + nameHTML(pl.broadcaster);
-      const vw = $('#liveViewers');
-      if (vw) vw.textContent = '👁 ' + (pl.viewers || 0).toLocaleString('en-US') + ' watching';
-      if (segIdx < 0) segIdx = Math.max(0, segs.length - 2); // join at the live edge
-      if (segIdx < segs.length) {
-        const url = segs[segIdx];
-        v.src = url;
-        v.play().catch(() => {});
-        statusEl.textContent = ended ? 'Final moments…' : '🔴 Live — you are watching in real time';
-        v.onended = () => { segIdx++; nextSeg(); };
-      } else {
-        statusEl.textContent = ended ? 'Stream ended 🔴' : 'Reconnecting…';
-        setTimeout(nextSeg, ended ? 4000 : 3000);
+    /* ── MSE progressive player: the server stores RAW MediaRecorder chunks;
+       appending them in order to a MediaSource = ONE continuous gapless webm.
+       This kills the "plays a few seconds, resets to start" glitch. ── */
+    let plMime = '';
+    let lastSegCount = 0;
+    let streamEnded = false;
+    const segUrls = [];
+    let msRef = null, sbRef = null, mIdx = 0, mQueue = [], mFetching = false, mRetr = 0, seeked = false;
+
+    function stepMse() {
+      if (!sbRef || sbRef.updating) return;
+      if (mQueue.length) { const b = mQueue.shift(); try { sbRef.appendBuffer(b); } catch (e) { if (statusEl) statusEl.textContent = 'Playback error ⚠️'; } return; }
+      if (mFetching || mIdx >= segUrls.length) {
+        if (!mFetching && mIdx >= segUrls.length) {
+          if (streamEnded) {
+            try { if (msRef.readyState === 'open') msRef.endOfStream(); } catch (e) {}
+            if (statusEl) statusEl.textContent = 'Stream ended 🔴';
+          } else setTimeout(stepMse, 2500); // wait for fresh segments
+        }
+        return;
       }
+      mFetching = true;
+      const url = segUrls[mIdx];
+      fetch(url).then(r => { if (!r.ok) throw new Error('http ' + r.status); return r.arrayBuffer(); })
+        .then(b => { mQueue.push(b); mIdx++; mRetr = 0; })
+        .catch(() => { if (++mRetr >= 3) { mRetr = 0; mIdx++; } })
+        .then(() => {
+          mFetching = false;
+          if (mIdx >= 2 && !seeked) {
+            seeked = true;
+            /* join near the live edge (5s behind the newest appended data) */
+            if (isFinite(msRef.duration) && msRef.duration > 1) { try { v.currentTime = Math.max(0, msRef.duration - 5); } catch (e) {} }
+            v.play().catch(() => {});
+          }
+          stepMse();
+        });
     }
-    nextSeg();
+    function startMse() {
+      const cands = [plMime, 'video/webm; codecs="vp8,opus"', 'video/webm; codecs="vp9,opus"', 'video/webm'];
+      let mime = '';
+      for (const m of cands) { if (m && window.MediaSource) { try { if (MediaSource.isTypeSupported(m)) { mime = m; break; } } catch (e) {} } }
+      if (!window.MediaSource || !mime) { if (statusEl) statusEl.textContent = 'Live playback unsupported in this browser ⚠️'; return; }
+      try { msRef = new MediaSource(); } catch (e) { return; }
+      v.src = URL.createObjectURL(msRef);
+      msRef.addEventListener('sourceopen', () => {
+        try { sbRef = msRef.addSourceBuffer(mime); } catch (e) { if (statusEl) statusEl.textContent = 'Playback error ⚠️'; return; }
+        sbRef.mode = 'sequence';
+        sbRef.addEventListener('updateend', stepMse);
+        stepMse();
+      });
+      /* keep memory sane on long streams: drop what is far behind playback */
+      setInterval(() => {
+        if (!sbRef || sbRef.updating || !v.buffered.length) return;
+        if (v.currentTime - v.buffered.start(0) > 120) { try { sbRef.remove(v.buffered.start(0), v.currentTime - 60); } catch (e) {} }
+      }, 30000);
+    }
+    const livePoller = setInterval(async () => {
+      if (!document.querySelector('#liveVideo')) { clearInterval(livePoller); return; }
+      try {
+        const pl = await api('/api/live/' + id + '/playlist');
+        if (pl.status === 'gone') { clearInterval(livePoller); if (statusEl) statusEl.textContent = 'Stream ended'; return; }
+        if (pl.mime) plMime = pl.mime;
+        const segs = pl.segs || [];
+        if (segs.length > lastSegCount) {
+          segUrls.push(...segs.slice(lastSegCount));
+          lastSegCount = segs.length;
+          if (!msRef && segs.length >= 2) startMse();
+        }
+        const te = $('#liveTitleEl'); if (te) te.textContent = pl.title || '';
+        const be = $('#liveBroadEl'); if (be) be.innerHTML = 'by ' + nameHTML(pl.broadcaster);
+        const vw = $('#liveViewers'); if (vw) vw.textContent = '👁 ' + (pl.viewers || 0).toLocaleString('en-US') + ' watching';
+        if (statusEl) statusEl.textContent = pl.status === 'ended' ? 'Final moments…' : '🔴 Live — you are watching in real time';
+        if (pl.status === 'ended') streamEnded = true;
+      } catch (e) {}
+    }, 3000);
+    cleanups.push(() => clearInterval(livePoller));
   }
 
 
