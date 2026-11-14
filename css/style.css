@@ -1039,6 +1039,39 @@ body.has-ann main { padding-top: 138px; }
 .notif-text { font-weight: 500; font-size: 14.5px; line-height: 1.4; }
 .notif-time { color: var(--mut); font-size: 12px; margin-top: 5px; font-weight: 600; }
 
+/* ══════════ LIVE STREAMING ══════════ */
+.live-nav .live-ico { animation: livePulse 1.5s ease-in-out infinite; }
+@keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+.live-page .live-preview {
+  position: relative;
+  border-radius: var(--r);
+  overflow: hidden;
+  background: #000;
+  border: 1px solid rgba(255, 43, 214, .4);
+  min-height: 220px;
+  display: flex; align-items: center; justify-content: center;
+}
+.live-page .live-preview video { width: 100%; display: block; }
+.live-off { color: var(--mut); font-weight: 600; }
+.live-btn { animation: livePulse 2s ease-in-out infinite; }
+.live-view-page { max-width: 1100px; margin: 0 auto; }
+.live-badge {
+  position: absolute; top: 10px; left: 10px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 99px;
+  background: rgba(255, 30, 60, .9);
+  color: #fff; font-family: 'Orbitron', sans-serif; font-size: 11px; letter-spacing: 1px;
+  font-weight: 700;
+  z-index: 6;
+}
+.live-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: #fff;
+  animation: livePulse 1.2s ease-in-out infinite;
+}
+.live-card .thumb { position: relative; }
+.live-card:hover { transform: translateY(-4px); }
+
 /* ══════════ TOASTS ══════════ */
 .toasts {
   position: fixed; right: 22px; bottom: 22px; z-index: 100;
