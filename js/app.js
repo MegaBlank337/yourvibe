@@ -1698,6 +1698,7 @@
       + '<div class="admin-row"><input type="text" id="adminAnnText" maxlength="300" placeholder="📣 Announcement text (everyone sees it)"><button class="pill-btn" data-admin="announce">📣 Post</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">announcement shows as a banner on the site</span><button class="pill-btn danger" data-admin="announce-clear">🗑 Remove announcement</button></div>'
       + '<div class="admin-row"><input type="text" id="adminVerifyName" maxlength="50" placeholder="✔ creator name to verify"><button class="pill-btn" data-admin="verify">✔ Verify</button><button class="pill-btn danger" data-admin="unverify">✕ Unverify</button></div>'
+      + '<div class="admin-row"><input type="text" id="adminColorName" maxlength="50" placeholder="creator name"><select id="adminColorSel"><option value="">no rank</option><option value="bronze">🥉 Bronze</option><option value="silver">🥈 Silver</option><option value="gold">🥇 Gold</option><option value="diamond">💎 Diamond</option><option value="ruby">🔴 Ruby</option></select><button class="pill-btn" data-admin="setcolor">🎨 Set color</button></div>'
       + '<div class="admin-row"><input type="text" id="adminNotifText" maxlength="300" placeholder="🔔 Notification text (from YourVibe ✓)"><button class="pill-btn" data-admin="notify">🔔 Send</button></div>'
       + '<div class="admin-row"><input type="text" id="adminNotifTo" maxlength="50" placeholder="to account (empty = everyone)"><span class="muted-txt" style="align-self:center;font-size:13px">leave empty = send to all</span></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">clears every notification</span><button class="pill-btn danger" data-admin="notif-clear">🗑 Clear notifications</button></div>'
@@ -1746,6 +1747,21 @@
   }
 
   async function adminAction(kind) {
+    if (kind === 'setcolor') {
+      const name = ($('#adminColorName') && $('#adminColorName').value || '').trim();
+      const color = ($('#adminColorSel') && $('#adminColorSel').value || '').trim();
+      if (!name) { toast('Enter the creator name', '⚠️'); return; }
+      try {
+        await api('/api/admin/creator/color', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
+          body: JSON.stringify({ name, color })
+        });
+        await loadVideos();
+        toast('Color set for ' + name + ' 🎨', '✅');
+      } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
     if (kind === 'verify' || kind === 'unverify') {
       const name = ($('#adminVerifyName') && $('#adminVerifyName').value || '').trim();
       if (!name) { toast('Enter the creator name', '⚠️'); return; }
