@@ -2350,11 +2350,58 @@
   let liveEnding = false;
   let liveMime = '';
   let liveRawStream = null;
+  let mixRef = null;
+  let micSilentSecs = 0;
 
   function pickMime() {
     const cands = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm'];
     for (const m of cands) { if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m; }
     return '';
+  }
+
+  /* measure a captured audio track: does it produce ANY signal? */
+  async function micAlive(ms) {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AC();
+      await ctx.resume().catch(() => {});
+      const an = ctx.createAnalyser();
+      an.fftSize = 512;
+      ctx.createMediaStreamSource(ms).connect(an);
+      const buf = new Uint8Array(an.fftSize);
+      let peak = 0;
+      const t0 = Date.now();
+      while (Date.now() - t0 < 1200) {
+        an.getByteTimeDomainData(buf);
+        for (let i = 0; i < buf.length; i++) { const d = Math.abs(buf[i] - 128) / 128; if (d > peak) peak = d; }
+        await new Promise(r => setTimeout(r, 90));
+      }
+      try { ctx.close().catch(() => {}); } catch (e) {}
+      return peak; // caller decides the threshold
+    } catch (e) { return null; } // cannot measure → accept the device
+  }
+
+  /* "Allow" is not enough — the OS default input can be disconnected or busy.
+     Probe the default device first, then every enumerated audio input;
+     keep the first one that produces real signal; fall back to the first that opened. */
+  async function getWorkingMic() {
+    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+    const inputs = devices.filter(d => d.kind === 'audioinput');
+    const attempts = [null].concat(inputs.map(d => ({ deviceId: { exact: d.deviceId } })));
+    let fallback = null;
+    for (const c of attempts) {
+      let ms = null;
+      try {
+        ms = await navigator.mediaDevices.getUserMedia({ audio: Object.assign({ echoCancellation: true, noiseSuppression: true }, c || {}) });
+      } catch (e) { continue; } // busy/absent → next device
+      const track = ms.getAudioTracks()[0];
+      if (!track) continue;
+      if (!fallback) fallback = ms;
+      const peak = await micAlive(ms);
+      if (peak === null || peak >= 0.0015) return ms; // alive (or unmeasurable)
+      try { track.stop(); } catch (e) {} // dead device → try the next one
+    }
+    return fallback; // nothing measured alive — use whatever opened
   }
 
   /* floating control bar — lives on document.body, survives any navigation */
@@ -2366,12 +2413,42 @@
       + '<span class="lb-title">' + esc(title) + '</span>'
       + '<span class="lb-stat" id="lbTime">0:00</span>'
       + '<span class="lb-stat" id="lbSegs">0 segs</span>'
+      + '<span class="lb-stat" id="lbMic">🎙 —</span>'
       + '<span class="lb-stat" id="lbViewers">👁 …</span>'
       + '<button class="lb-end" id="lbEnd">⏹ End stream</button>';
     document.body.appendChild(bar);
     return bar;
   }
   function removeLiveBar() { const b = document.getElementById('liveBar'); if (b) b.remove(); }
+
+  /* mix ALL audio tracks (mic + screen) into ONE track via WebAudio with gain —
+     guarantees the mic is audible even when a silent tab-audio track exists
+     (Chrome's MediaRecorder alone can favor the first, silent track) */
+  async function buildMixedStream(stream) {
+    const vTracks = stream.getVideoTracks();
+    const aTracks = stream.getAudioTracks();
+    if (!aTracks.length) return stream;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AC();
+      await ctx.resume().catch(() => {});
+      const dest = ctx.createMediaStreamDestination();
+      let analyser = null;
+      aTracks.forEach(t => {
+        try {
+          const src = ctx.createMediaStreamSource(new MediaStream([t]));
+          const g = ctx.createGain();
+          g.gain.value = 1.6;
+          src.connect(g);
+          g.connect(dest);
+          if (!analyser) { analyser = ctx.createAnalyser(); analyser.fftSize = 512; g.connect(analyser); }
+        } catch (e) {}
+      });
+      mixRef = { ctx, dest, analyser };
+      const out = new MediaStream([...vTracks, ...dest.stream.getAudioTracks()]);
+      return out;
+    } catch (e) { return stream; }
+  }
 
   async function startBroadcast(stream, title, thumb, mime) {
     const r = await api('/api/live/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, thumb, mime }) });
@@ -2392,10 +2469,30 @@
         if (sg) sg.textContent = (pl.segs || []).length + ' segs';
         if (vw) vw.textContent = '👁 ' + (pl.viewers || 0).toLocaleString('en-US') + ' watching';
       } catch (e) {}
+      /* mic level meter + silence alarm */
+      const micEl = $('#lbMic');
+      if (micEl) {
+        if (mixRef && mixRef.analyser) {
+          const buf = new Uint8Array(mixRef.analyser.fftSize);
+          mixRef.analyser.getByteTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) { const d = (buf[i] - 128) / 128; sum += d * d; }
+          const rms = Math.sqrt(sum / buf.length);
+          const lvl = Math.min(6, Math.ceil(rms * 16));
+          micEl.textContent = '🎙 ' + (lvl ? '▮'.repeat(lvl) : '—');
+          micEl.style.color = lvl ? '' : '#ff5a78';
+          if (rms < 0.01) {
+            micSilentSecs++;
+            if (micSilentSecs === 8) toast('Микрофон молчит! Проверь устройство ввода в системе 🎙⚠️', '🔇');
+          } else micSilentSecs = 0;
+        } else micEl.textContent = '🎙 off';
+      }
     }, 1000);
 
-    /* recorder: 3s segments → CDN via the API (retries, timeouts) */
-    liveRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000 });
+    /* recorder: 3s segments → CDN via the API (retries, timeouts).
+       audio = WebAudio mix of mic + screen audio (gain 1.6) — mic never lost */
+    const recStream = await buildMixedStream(stream);
+    liveRecorder = new MediaRecorder(recStream, { mimeType: mime, videoBitsPerSecond: 2500000 });
     liveRecorder.ondataavailable = async e => {
       if (!e.data || !e.data.size || !liveStreamId) return;
       for (let attempt = 1; attempt <= 3; attempt++) {
@@ -2437,6 +2534,8 @@
       clearTimeout(killer);
     } catch (e) { /* server auto-ends after 45s without segments */ }
     toast('Stream ended', '🔴');
+    try { if (mixRef && mixRef.ctx) mixRef.ctx.close().catch(() => {}); } catch (e) {}
+    mixRef = null; micSilentSecs = 0;
     liveRecorder = null; liveStreamId = null; liveRawStream = null; UPLOADING = false;
     if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
     removeLiveBar();
@@ -2516,8 +2615,8 @@
       $('#liveErr').textContent = '';
       let stream;
       try {
-        stream = src === 'screen' ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
-          : await navigator.mediaDevices.getUserMedia({ video: { width: 1280 }, audio: true });
+        if (src === 'screen') stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        else stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280 } });
       } catch (e) {
         $('#liveErr').textContent = '⚠️ ' + (e.name === 'NotAllowedError' ? 'permission denied' : e.message);
         btn.disabled = false; btn.textContent = '🔴 Go Live';
@@ -2525,26 +2624,16 @@
       }
       liveRawStream = stream;
 
-      /* guarantee the mic: screen shares often return a SILENT tab-audio track
-         even when the microphone is allowed — always mix the real mic in */
+      /* mic: "allow" is not enough — the OS default input may be disconnected.
+         probe every audio input, keep one that actually produces signal */
       const wantMic = !(document.querySelector('#liveMic') && !document.querySelector('#liveMic').checked);
-      if (wantMic && src === 'screen') {
-        try {
-          const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (wantMic) {
+        const mic = await getWorkingMic();
+        if (mic) {
           mic.getAudioTracks().forEach(at => stream.addTrack(at));
-          toast('Микрофон добавлен — тебя слышно 🎙', '🎤');
-        } catch (e) { toast('Микрофон недоступен: ' + e.name, '⚠️'); }
-      }
-
-      /* sound check: screen shares only carry audio if "Share audio" was checked */
-      if (!stream.getAudioTracks().length) {
-        toast('No sound! Enable "Share audio" in the share dialog, or pick Camera to use your mic', '🔇');
-        if (src === 'screen') {
-          try {
-            const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mic.getAudioTracks().forEach(at => stream.addTrack(at));
-            toast('Microphone added for sound 🎤', '🎤');
-          } catch (e) { /* user declined mic — stream stays silent */ }
+          toast('Микрофон подключен — уровень виден на баре 🎙', '🎤');
+        } else {
+          toast('Микрофон не найден или молчит — проверь устройство ввода в системе ⚠️', '🔇');
         }
       }
 
