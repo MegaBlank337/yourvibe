@@ -1560,6 +1560,17 @@ app.get('/api/support/all', async (req, res) => {
   } catch (e) { res.json([]); }
 });
 
+/* admin closes a problem → the whole thread is cleared (both sides) */
+app.delete('/api/support', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const username = String(req.query.user || '').trim().slice(0, 50);
+    if (!username) return res.status(400).json({ error: 'missing user' });
+    await q('delete from support where username = $1', [username]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
 /* ═══════════ LIVE STREAMING (in-memory; segments on Supabase CDN) ═══════════ */
 const liveStreams = new Map(); // id -> { id, title, broadcaster, token, header, segs, n, lastSeg, status, startedAt }
 
