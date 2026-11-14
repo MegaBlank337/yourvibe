@@ -531,7 +531,7 @@
     /* Bunny CDN videos: placeholder only while Bunny hasn't given us the file */
     if (/iframe\.mediadelivery\.net/.test(src)) {
       return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer" data-bunny="' + v.id + '">'
-        + '<div class="loading-box" style="padding:60px 20px"><div class="spinner"></div><p>CDN is preparing your video — a few seconds…</p></div>'
+        + '<div class="loading-box" style="padding:60px 20px"><div class="spinner"></div><p id="bunnyPct">CDN is encoding your video — 0%</p></div>'
         + '</div>';
     }
     return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer">'
@@ -599,10 +599,12 @@
     /* bunny video: resolve CDN URLs, play via HLS (adaptive — instant start) */
     if (v.store === 'bunny' || /iframe\.mediadelivery\.net/.test(srcOf(v) || '')) {
       (async () => {
-        for (let i = 0; i < 40; i++) {
+        for (let i = 0; i < 120; i++) {
           try {
             const s = await api('/api/videos/' + v.id + '/playurl');
-            if (s.play && !/iframe\.mediadelivery/.test(s.play)) {
+            const pct = document.querySelector('#bunnyPct');
+            if (s.processing && pct) pct.textContent = 'CDN is encoding your video — ' + (s.progress || 0) + '% · starts automatically when done';
+            if (s.play && !s.processing && !/iframe\.mediadelivery/.test(s.play)) {
               s.hls = new URL(s.play).origin + '/' + v.id + '/playlist.m3u8';
             }
             if (s.hls) {
@@ -632,7 +634,7 @@
               return;
             }
           } catch (e) {}
-          await new Promise(r => setTimeout(r, 3000));
+          await new Promise(r => setTimeout(r, 5000));
           const P = $('#yvPlayer');
           if (!P || !P.dataset.bunny) return;
         }
