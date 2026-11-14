@@ -270,6 +270,7 @@ async function migrate() {
   await q(`alter table users add column if not exists banner text`);
   await q(`alter table users add column if not exists avatar_url text`);
   await q(`alter table users add column if not exists banner_url text`);
+  await q(`alter table users add column if not exists bio text`);
   await q(`create table if not exists polls (
     id uuid primary key default gen_random_uuid(),
     video_id uuid references videos(id) on delete cascade,
@@ -533,7 +534,7 @@ app.get('/api/boot', async (req, res) => {
     const u = await authUser(req);
     if (u) {
       try {
-        const r = await q('select username, avatar_url, banner_url from users where username = $1', [u]);
+        const r = await q('select username, avatar_url, banner_url, bio from users where username = $1', [u]);
         me = r.rows[0] || { username: u };
       } catch (e) { me = { username: u }; }
     }
@@ -582,9 +583,9 @@ app.get('/api/auth/me', async (req, res) => {
   const username = await authUser(req);
   if (!username) return res.status(401).json({ error: 'not logged in' });
   try {
-    const r = await q('select username, avatar_url, banner_url from users where username = $1', [username]);
+    const r = await q('select username, avatar_url, banner_url, bio from users where username = $1', [username]);
     const u = r.rows[0] || {};
-    res.json({ username, avatar_url: u.avatar_url || null, banner_url: u.banner_url || null });
+    res.json({ username, avatar_url: u.avatar_url || null, banner_url: u.banner_url || null, bio: u.bio || null });
   } catch (e) { res.json({ username }); }
 });
 
@@ -601,6 +602,11 @@ app.post('/api/auth/profile', async (req, res) => {
       await sbPut(p, Buffer.from(String(b.avatar).split(',')[1], 'base64'), 'image/jpeg');
       await q('update users set avatar_url = $2 where username = $1', [username, pubUrl(p)]);
       out.avatar_url = pubUrl(p);
+    }
+    if (b.bio !== undefined) {
+      const bio = String(b.bio || '').slice(0, 1000);
+      await q('update users set bio = $2 where username = $1', [username, bio]);
+      out.bio = bio;
     }
     if (b.banner) {
       if (!String(b.banner).startsWith('data:image/') || String(b.banner).length > 2000000) return res.status(400).json({ error: 'bad banner' });
