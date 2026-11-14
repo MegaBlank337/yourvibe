@@ -307,8 +307,10 @@ async function migrate() {
   await q(`create table if not exists notifications (
     id bigserial primary key,
     text text not null,
+    target text,
     created_at timestamptz default now()
   )`);
+  await q(`alter table notifications add column if not exists target text`);
   await q(`create table if not exists polls (
     id uuid primary key default gen_random_uuid(),
     video_id uuid references videos(id) on delete cascade,
@@ -579,8 +581,9 @@ app.get('/api/boot', async (req, res) => {
     }
     let notifications = [];
     try {
-      const nt = await q('select id, text, created_at from notifications order by id desc limit 10');
-      notifications = nt.rows;
+      const me = await authUser(req);
+      const nt = await q('select id, text, target, created_at from notifications order by id desc limit 20');
+      notifications = nt.rows.filter(n => !n.target || (me && n.target === me));
     } catch (e) {}
     res.json({
       videos: vids.rows.map(row => Object.assign({}, row, {
@@ -1327,8 +1330,9 @@ app.post('/api/admin/notification', async (req, res) => {
   try {
     if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
     const text = String((req.body && req.body.text) || '').trim().slice(0, 300);
+    const target = String((req.body && req.body.to) || '').trim().toLowerCase().slice(0, 50) || null;
     if (!text) return res.status(400).json({ error: 'empty notification' });
-    const r = await q('insert into notifications (text) values ($1) returning id, text, created_at', [text]);
+    const r = await q('insert into notifications (text, target) values ($1, $2) returning id, text, target, created_at', [text, target]);
     res.status(201).json(r.rows[0]);
   } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
