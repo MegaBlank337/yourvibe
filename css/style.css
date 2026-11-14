@@ -465,6 +465,8 @@ main > * { animation: fadeUp .38s ease both; }
 .player.vert { max-width: 430px; margin: 0 auto; }
 .player.vert video { max-height: 76vh; }
 
+#yvPlayer.is-playing .big-play { display: none !important; }
+
 .big-play {
   position: absolute; inset: 0; margin: auto;
   width: 84px; height: 84px; border-radius: 50%;
