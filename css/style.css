@@ -959,6 +959,16 @@ body.has-ann main { padding-top: 138px; }
 .admin-row input:focus { border-color: rgba(0, 229, 255, .6); }
 .admin-row .pill-btn { flex: 1; justify-content: center; }
 
+/* ══════════ CHANNEL RANK (bronze..ruby) ══════════ */
+.rank-chip {
+  display: inline-block;
+  font-family: 'Orbitron', sans-serif; font-size: 11px; letter-spacing: 1px;
+  border: 1.5px solid; border-radius: 99px;
+  padding: 3px 10px; margin-left: 10px; vertical-align: 4px;
+  background: rgba(10, 12, 28, .6);
+}
+.ch-ava .av, .ch-ava .av-img { transition: box-shadow .3s; }
+
 /* ══════════ VERIFIED BADGE ══════════ */
 .vrf-badge {
   display: inline-grid; place-items: center;
