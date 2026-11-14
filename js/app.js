@@ -325,6 +325,25 @@
   }
 
   function watchHref(v) { return (v.store === 'live' && Number(v.parts) === 0) ? '#/live/' + v.id : '#/watch/' + v.id; }
+  function isStream(v) { return v && v.store === 'live'; }
+  function streamCardHTML(v) {
+    const up = upOf(v);
+    const liveNow = Number(v.parts) === 0;
+    return '<a class="card stream-card" href="' + watchHref(v) + '">'
+      + '<div class="thumb" style="--c1:' + up.colors[0] + ';--c2:' + up.colors[1] + '">'
+      + (v.thumb_url ? '<img loading="lazy" src="' + thumbSrc(v) + '" alt="" onerror="this.style.display=\'none\'">' : '')
+      + '<span class="stream-badge' + (liveNow ? ' live' : '') + '">' + (liveNow ? '<span class="live-dot"></span>LIVE' : 'LIVE ENDED') + '</span>'
+      + '</div>'
+      + '<div class="meta-txt sc-meta"><h3>' + esc(v.title) + '</h3>'
+      + '<div class="v-stats">👁 ' + fmtNum(viewsOf(v)) + ' views · 💬 <span class="sc-cnt" data-vid="' + v.id + '">…</span> · ' + agoOf(v) + '</div>'
+      + '</div></a>';
+  }
+  function fillStreamCounts() {
+    document.querySelectorAll('.sc-cnt').forEach(async el => {
+      try { const list = await api('/api/videos/' + el.dataset.vid + '/comments'); el.textContent = String((list || []).length); }
+      catch (e) { el.textContent = '0'; }
+    });
+  }
 
   function cardHTML(v) {
     const up = upOf(v);
@@ -387,7 +406,7 @@
     if (!await ensureVideos()) return;
     try { LIVE_NOW = await api('/api/live'); } catch (e) { LIVE_NOW = []; }
     const cat = q.get('cat') || 'All';
-    const videos = VIDEOS.filter(v => v.type !== 'short');
+    const videos = VIDEOS.filter(v => v.type !== 'short' && !isStream(v));
     const shorts = VIDEOS.filter(v => v.type === 'short');
     const trending = videos.slice().sort((a, b) => viewsOf(b) - viewsOf(a)).slice(0, 4);
     const filtered = cat === 'All' ? videos : videos.filter(v => v.category === cat);
@@ -483,7 +502,7 @@
         '<a class="btn-neon" href="#/home">Browse videos</a>');
       return;
     }
-    const vids = VIDEOS.filter(v => S.subs[v.uploader]);
+    const vids = VIDEOS.filter(v => S.subs[v.uploader] && !isStream(v));
     main.innerHTML =
       '<h1 class="page-title">Subscriptions</h1>'
       + '<div class="sub-chips">' + names.map(n =>
@@ -495,10 +514,10 @@
   /* ═══════════ VIEW: LIBRARY ═══════════ */
   async function viewLibrary() {
     if (!await ensureVideos()) return;
-    const hist = S.history.map(byId).filter(Boolean).slice(0, 12);
-    const liked = Object.keys(S.likes).map(byId).filter(Boolean);
-    const later = Object.keys(S.later).map(byId).filter(Boolean);
-    const mine = VIDEOS.filter(v => v.uploader === myName());
+    const hist = S.history.map(byId).filter(Boolean).filter(v => !isStream(v)).slice(0, 12);
+    const liked = Object.keys(S.likes).map(byId).filter(Boolean).filter(v => !isStream(v));
+    const later = Object.keys(S.later).map(byId).filter(Boolean).filter(v => !isStream(v));
+    const mine = VIDEOS.filter(v => v.uploader === myName() && !isStream(v));
     const any = hist.length || liked.length || later.length || mine.length;
 
     main.innerHTML = '<h1 class="page-title">Library</h1>' + (!any
@@ -513,7 +532,8 @@
   async function viewMyChannel() {
     if (!await ensureVideos()) return;
     const c = S.myChannel;
-    const mine = VIDEOS.filter(v => v.uploader === myName());
+    const mine = VIDEOS.filter(v => v.uploader === myName() && !isStream(v));
+    const streams = VIDEOS.filter(v => v.uploader === myName() && isStream(v));
     const totalViews = mine.reduce((a, v) => a + (v.views || 0), 0);
     const totalLikes = mine.reduce((a, v) => a + likesOf(v), 0);
 
@@ -529,6 +549,7 @@
       + '</div>'
       + '<div class="ch-tabs">'
       + '<button class="tab-btn on" data-action="tab" data-tab="vids">🎬 Videos</button>'
+      + (streams.length ? '<button class="tab-btn" data-action="tab" data-tab="streams">🔴 Streams <span class="tab-count">' + streams.length + '</span></button>' : '')
       + '<button class="tab-btn" data-action="tab" data-tab="about">💫 About</button>'
       + '</div>'
       + '<div class="tab-panel" data-panel="vids">'
@@ -541,18 +562,23 @@
           + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="pill-btn danger" data-action="del" data-id="' + v.id + '">Delete</button>' : '')
           + '</div>').join('') + '</div>' : '')
       + '</div>'
+      + (streams.length ? '<div class="tab-panel hide" data-panel="streams">'
+        + '<div class="cards">' + streams.map(streamCardHTML).join('') + '</div>'
+        + '</div>' : '')
       + '<div class="tab-panel hide" data-panel="about">'
       + '<div class="about-card"><h3>About</h3><p>' + esc(c.bio || 'No bio yet.').replace(/\n/g, '<br>') + '</p>'
       + '<div class="ch-stats"><span>📹 ' + mine.length + ' uploads</span><span>👁 ' + fmtNum(totalViews) + ' total views</span><span>❤️ ' + fmtNum(totalLikes) + ' likes received</span></div>'
       + '</div></div>'
       + '</div>';
+    fillStreamCounts();
   }
 
   /* ═══════════ VIEW: CREATOR CHANNEL ═══════════ */
   async function viewChannel(name) {
     if (!await ensureVideos()) return;
     const n = decodeURIComponent(name);
-    const vids = VIDEOS.filter(v => v.uploader === n);
+    const vids = VIDEOS.filter(v => v.uploader === n && !isStream(v));
+    const streams = VIDEOS.filter(v => v.uploader === n && isStream(v));
     const pal = n === S.myChannel.name ? S.myChannel.colors : palFor(n);
     const rk = rankOf(n);
     main.innerHTML = '<div class="channel-page" data-scope="c"' + (rk ? ' style="--rank:' + rk.hex + '"' : '') + '>'
@@ -560,23 +586,28 @@
       + '<div class="ch-head">'
       + '<span class="ch-ava">' + avatarHTML({ name: n, colors: pal, isMe: n === S.myChannel.name }, 96) + '</span>'
       + '<div class="ch-id"><h1 class="ch-name-big rank-name"' + (rankOf(n) ? ' style="color:' + rankOf(n).hex + ';text-shadow:0 0 18px ' + rankOf(n).hex + '66"' : '') + '>' + nameHTML(n) + (rankOf(n) ? ' <span class="rank-chip" style="border-color:' + rankOf(n).hex + ';color:' + rankOf(n).hex + '">' + rankOf(n).label + '</span>' : '') + '</h1>'
-      + '<div class="ch-sub">' + fmtNum(subsOfCreator(n)) + ' subscribers · ' + vids.length + ' video' + (vids.length === 1 ? '' : 's') + '</div></div>'
+      + '<div class="ch-sub">' + fmtNum(subsOfCreator(n)) + ' subscribers · ' + vids.length + ' video' + (vids.length === 1 ? '' : 's') + (streams.length ? ' · ' + streams.length + ' stream' + (streams.length === 1 ? '' : 's') : '') + '</div></div>'
       + subBtnHTML(n)
       + '</div>'
       + '<div class="ch-tabs">'
       + '<button class="tab-btn on" data-action="tab" data-tab="vids">🎬 Videos</button>'
+      + (streams.length ? '<button class="tab-btn" data-action="tab" data-tab="streams">🔴 Streams <span class="tab-count">' + streams.length + '</span></button>' : '')
       + '<button class="tab-btn" data-action="tab" data-tab="about">💫 About</button>'
       + '</div>'
       + '<div class="tab-panel" data-panel="vids">'
       + (vids.length ? '<div class="cards">' + vids.map(cardHTML).join('') + '</div>'
         : emptyHTML('🎥', 'No uploads yet', 'This creator hasn\'t published anything yet.'))
       + '</div>'
+      + (streams.length ? '<div class="tab-panel hide" data-panel="streams">'
+        + '<div class="cards">' + streams.map(streamCardHTML).join('') + '</div>'
+        + '</div>' : '')
       + '<div class="tab-panel hide" data-panel="about">'
       + '<div class="about-card"><h3>About ' + esc(n) + '</h3>'
       + '<p>Creator on YourVibe ⚡</p>'
       + '<div class="ch-stats"><span>🔔 ' + fmtNum(subsOfCreator(n)) + ' subscribers</span><span>🎬 ' + vids.length + ' video' + (vids.length === 1 ? '' : 's') + '</span><span>👁 ' + fmtNum(vids.reduce((a, v) => a + viewsOf(v), 0)) + ' total views</span></div>'
       + '</div></div>'
       + '</div>';
+    fillStreamCounts();
   }
 
   /* ═══════════ comments (server-side, shared) ═══════════ */
@@ -644,7 +675,7 @@
     addHistory(id);
 
     const up = upOf(v);
-    const related = VIDEOS.filter(x => x.id !== v.id);
+    const related = VIDEOS.filter(x => x.id !== v.id && !isStream(x));
     const sameCat = related.filter(x => x.category === v.category);
     const rel = sameCat.concat(related.filter(x => x.category !== v.category)).slice(0, 10);
 
@@ -951,10 +982,10 @@
     const term = (q.get('q') || '').trim().toLowerCase();
     $('#searchInput').value = q.get('q') || '';
     const res = term
-      ? VIDEOS.filter(v =>
+      ? VIDEOS.filter(v => !isStream(v) && (
           v.title.toLowerCase().includes(term) ||
           v.uploader.toLowerCase().includes(term) ||
-          (v.category || '').toLowerCase().includes(term))
+          (v.category || '').toLowerCase().includes(term)))
       : [];
     main.innerHTML = '<h1 class="page-title">Results for “' + esc(term) + '”</h1>'
       + (res.length
