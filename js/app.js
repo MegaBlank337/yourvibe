@@ -1441,11 +1441,18 @@
     if (!S.auth || !S.auth.token) return;
     try {
       const me = await api('/api/auth/me');
+      if (!me || !me.username) throw new Error('dead session');
       if (me.avatar_url) { S.acctAvatar = me.avatar_url; AVATARS[S.auth.username.toLowerCase()] = me.avatar_url; }
       if (me.banner_url) S.acctBanner = me.banner_url;
       if (me.bio) S.myChannel.bio = me.bio;
       renderMe();
-    } catch (e) {}
+    } catch (e) {
+      /* session died (token invalidated server-side) → self-heal: clear + prompt */
+      S.auth = null;
+      YV.store.save();
+      renderMe();
+      toast('Session expired — please log in again', '🔑');
+    }
   }
 
   /* save avatar/banner to the account immediately when picked */
