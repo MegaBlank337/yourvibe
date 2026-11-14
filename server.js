@@ -1364,19 +1364,34 @@ app.post('/api/admin/creator/color', async (req, res) => {
 
 
 /* live chat generator (admin controlled): fake comments into live streams */
-let liveChatCfg = { enabled: false, rateSec: 4 };
+let liveChatCfg = { enabled: false, rateSec: 4, lang: 'ru' };
 app.post('/api/admin/live/chat', async (req, res) => {
   try {
     if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
     const enabled = !!(req.body && req.body.enabled);
     const rateSec = Math.max(1, Math.min(60, parseInt((req.body && req.body.rateSec) || '4', 10) || 4));
-    liveChatCfg = { enabled, rateSec };
+    const lang = ['ru', 'en', 'mix'].includes(String((req.body && req.body.lang) || '')) ? String(req.body.lang) : 'ru';
+    liveChatCfg = { enabled, rateSec, lang };
     res.json({ ok: true, ...liveChatCfg });
   } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
-app.get('/api/admin/live/chat', async (req, res) => {
+app.get('/api/admin/live/chat', (req, res) => {
   if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
   res.json(liveChatCfg);
+});
+
+/* admin boosts / drops viewers on the CURRENT live stream */
+app.post('/api/admin/live/viewers', (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const delta = parseInt((req.body && req.body.delta) || '0', 10) || 0;
+    if (!delta) return res.status(400).json({ error: 'missing delta' });
+    let target = null;
+    liveStreams.forEach(st => { if (st.status === 'live' && (!target || st.startedAt > target.startedAt)) target = st; });
+    if (!target) return res.status(404).json({ error: 'no live stream running' });
+    target.viewersBoost = Math.max(-5000, (target.viewersBoost || 0) + delta);
+    res.json({ ok: true, id: target.id, title: target.title, boost: target.viewersBoost });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
 
 app.post('/api/admin/creator/verify', async (req, res) => {
@@ -1643,7 +1658,8 @@ app.get('/api/live/:id/playlist', (req, res) => {
   const st = liveStreams.get(req.params.id);
   if (!st) return res.json({ status: 'gone' });
   const elapsed = Math.max(1, Math.round((Date.now() - st.startedAt) / 1000));
-  const viewers = Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + elapsed * st.viewersRate + crypto.randomInt(15)));
+  const natural = Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + elapsed * st.viewersRate + crypto.randomInt(15)));
+  const viewers = Math.max(0, natural + (st.viewersBoost || 0));
   res.json({ status: st.status, title: st.title, broadcaster: st.broadcaster, segs: st.segs, startedAt: st.startedAt, thumb: st.thumbUrl, mime: st.mime || '', viewers });
 });
 
@@ -1687,7 +1703,7 @@ app.post('/api/live/:id/end', async (req, res) => {
   st.status = 'ended';
   const durSec = Math.max(1, Math.round((Date.now() - st.startedAt) / 1000));
   const duration = Math.floor(durSec / 60) + ':' + String(durSec % 60).padStart(2, '0');
-  const peak = Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + durSec * st.viewersRate));
+  const peak = Math.max(1, Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + durSec * st.viewersRate)) + (st.viewersBoost || 0));
   try {
     await q(`update videos set video_url = $2, parts = $3, sizes = $4, duration = $5, views = $6 where id = $1`,
       [st.id, st.segs[0] || '', st.segs.length, JSON.stringify(st.segs), duration, peak]);
@@ -1701,25 +1717,32 @@ app.get('/api/live', (req, res) => {
   liveStreams.forEach(st => {
     if (st.status !== 'live') return;
     const elapsed = Math.max(1, Math.round((Date.now() - st.startedAt) / 1000));
-    const viewers = Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + elapsed * st.viewersRate));
+    const natural = Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + elapsed * st.viewersRate));
+    const viewers = Math.max(0, natural + (st.viewersBoost || 0));
     out.push({ id: st.id, title: st.title, broadcaster: st.broadcaster, startedAt: st.startedAt, thumb: st.thumbUrl, viewers });
   });
   res.json(out);
 });
 
 
-/* fake live chat generator tick */
+/* fake live chat generator tick — EN / RU / mix (admin selects) */
 const FAKE_CHAT_NAMES = ['NeonFox', 'CyberWolf', 'PixelCat', 'TurboBanana', 'DarkGamer', 'MoonBoy', 'RobloxKing', 'StreamFan', 'ProGamer', 'LuckyOne'];
+const FAKE_CHAT_NAMES_RU = ['Тень', 'НеоН', 'КиберВолк', 'МятныйКотик', 'Геймер228', 'Дракон', 'Пиксель', 'Лунтик', 'СтримерФан', 'ТурбоБанан'];
 const FAKE_CHAT_TEXTS = ['🔥🔥🔥', 'lets gooo', 'first!!', 'W stream', 'POGGERS', 'how long today?', 'GG', 'the king is live 👑', 'hello 👋', '🔥', 'nice one!', '😍', 'play more!', 'from EU ❤️', 'best streamer'];
+const FAKE_CHAT_TEXTS_RU = ['🔥🔥🔥', 'го го го', 'первый!!', 'топ стрим', 'привет 👋', 'красавчик', 'давай дальше', '🔥', 'ахахах', 'го катку', 'как долго стрим?', 'из Москвы ❤️', 'лучший стример', 'подписался 👍', 'продолжай!', 'вау 😍', 'неожиданный поворот', 'кто еще здесь?'];
 let liveChatTick = 0;
 setInterval(() => {
   if (!liveChatCfg.enabled) return;
   liveChatTick++;
   if (liveChatTick % liveChatCfg.rateSec !== 0) return;
+  const lang = liveChatCfg.lang || 'ru';
+  const useRu = lang === 'ru' ? true : lang === 'mix' ? !crypto.randomInt(2) : false;
+  const names = useRu ? FAKE_CHAT_NAMES_RU : FAKE_CHAT_NAMES;
+  const texts = useRu ? FAKE_CHAT_TEXTS_RU : FAKE_CHAT_TEXTS;
   liveStreams.forEach(async st => {
     if (st.status !== 'live') return;
-    const author = FAKE_CHAT_NAMES[crypto.randomInt(FAKE_CHAT_NAMES.length)] + crypto.randomInt(99);
-    const text = FAKE_CHAT_TEXTS[crypto.randomInt(FAKE_CHAT_TEXTS.length)];
+    const author = names[crypto.randomInt(names.length)] + crypto.randomInt(99);
+    const text = texts[crypto.randomInt(texts.length)];
     try {
       await q('insert into comments (video_id, author, text) values ($1, $2, $3)', [st.id, author, text]);
     } catch (e) {}
