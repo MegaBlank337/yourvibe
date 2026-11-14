@@ -1135,7 +1135,9 @@ async function pollFor(videoId, req) {
 /* best available MP4 rendition for a bunny video */
 function bestRendition(available) {
   const list = String(available || '').toLowerCase();
-  const order = ['1080p', '720p', '480p', '360p', '240p'];
+  /* 720p max for direct MP4 — 1080p files are huge and slow to first byte.
+     Full adaptive quality comes from the HLS playlist instead. */
+  const order = ['720p', '480p', '360p', '240p'];
   const found = order.find(x => list.includes(x));
   return found || '360p';
 }
