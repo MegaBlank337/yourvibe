@@ -1926,7 +1926,9 @@
       + '<div class="admin-row"><input type="text" id="adminColorName" maxlength="50" placeholder="creator name"><select id="adminColorSel"><option value="">no rank</option><option value="bronze">🥉 Bronze</option><option value="silver">🥈 Silver</option><option value="gold">🥇 Gold</option><option value="diamond">💎 Diamond</option><option value="ruby">🔴 Ruby</option></select><button class="pill-btn" data-admin="setcolor">🎨 Set color</button></div>'
       + '<div class="admin-row"><input type="text" id="adminNotifText" maxlength="300" placeholder="🔔 Notification text (from YourVibe ✓)"><button class="pill-btn" data-admin="notify">🔔 Send</button></div>'
       + '<div class="admin-row"><input type="text" id="adminNotifTo" maxlength="50" placeholder="to account (empty = everyone)"><span class="muted-txt" style="align-self:center;font-size:13px">leave empty = send to all</span></div>'
-      + '<div class="admin-row"><input type="number" id="adminChatRate" min="1" max="60" placeholder="sec between comments"><button class="pill-btn" data-admin="chat-on">💬 Chat ON</button><button class="pill-btn danger" data-admin="chat-off">💬 OFF</button></div>'
+      + '<div class="admin-row"><input type="number" id="adminChatRate" min="1" max="60" placeholder="sec between comments"><select id="adminChatLang"><option value="ru">🇷🇺 RU</option><option value="en">🇬🇧 EN</option><option value="mix">🌐 EN+RU</option></select><button class="pill-btn" data-admin="chat-on">💬 Chat ON</button><button class="pill-btn danger" data-admin="chat-off">💬 OFF</button></div>'
+      + '<div class="admin-row"><input type="number" id="adminViewersN" value="500" min="1" max="100000"><button class="pill-btn" data-admin="live-viewers-plus">👁 + Зрители</button><button class="pill-btn danger" data-admin="live-viewers-minus">👁 − Зрители</button></div>'
+      + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">± viewers on the CURRENT live stream</span></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">clears every notification</span><button class="pill-btn danger" data-admin="notif-clear">🗑 Clear notifications</button></div>'
       + '<div class="admin-row span2"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">user problems arrive here as tickets — click one to open</span><button class="pill-btn" data-admin="support-open">📨 Load tickets</button></div>'
       + '<div class="span2" id="adminSupportRow">'
@@ -2066,14 +2068,31 @@
     }
     if (kind === 'chat-on' || kind === 'chat-off') {
       const rate = parseInt($('#adminChatRate') && $('#adminChatRate').value, 10) || 4;
+      const lang = ($('#adminChatLang') && $('#adminChatLang').value) || 'ru';
       const enabled = kind === 'chat-on';
       try {
         const r = await api('/api/admin/live/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
-          body: JSON.stringify({ enabled, rateSec: enabled ? rate : 4 })
+          body: JSON.stringify({ enabled, rateSec: enabled ? rate : 4, lang })
         });
-        toast(enabled ? 'Fake live chat ON — 1 comment / ' + r.rateSec + 's 💬' : 'Fake live chat OFF', '💬');
+        toast(enabled ? 'Fake live chat ON — ' + ({ ru: '🇷🇺 RU', en: '🇬🇧 EN', mix: '🌐 EN+RU' }[lang] || lang) + ' — 1 comment / ' + r.rateSec + 's 💬' : 'Fake live chat OFF', '💬');
+      } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
+    if (kind === 'live-viewers-plus' || kind === 'live-viewers-minus') {
+      const n = Math.abs(parseInt($('#adminViewersN') && $('#adminViewersN').value, 10) || 0);
+      if (!n) { toast('Set a viewers number first', '⚠️'); return; }
+      const delta = kind === 'live-viewers-plus' ? n : -n;
+      try {
+        const r = await fetch(API_BASE + '/api/admin/live/viewers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
+          body: JSON.stringify({ delta })
+        });
+        if (r.status === 404) { toast('No live stream running right now 📡', '⚠️'); return; }
+        const j = await r.json();
+        toast((delta > 0 ? '+' : '−') + n + ' viewers → «' + String(j.title || '').slice(0, 28) + '» (boost ' + (j.boost > 0 ? '+' : '') + j.boost + ') 👁', '👁');
       } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
       return;
     }
