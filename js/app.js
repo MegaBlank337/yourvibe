@@ -83,7 +83,7 @@
   const FEED_CACHE = 'yv_feed_v1';
 
   function saveFeedCache() {
-    try { localStorage.setItem(FEED_CACHE, JSON.stringify({ v: VIDEOS, c: CREATORS, a: AVATARS, t: Date.now() })); } catch (e) {}
+    try { localStorage.setItem(FEED_CACHE, JSON.stringify({ v: VIDEOS, c: CREATORS, a: AVATARS, ver: [...VERIFIED], n: NOTIFS, t: Date.now() })); } catch (e) {}
   }
 
   function hydrateFeedCache() {
@@ -95,6 +95,8 @@
       VIDEOS = j.v;
       CREATORS = j.c || {};
       AVATARS = j.a || {};
+      VERIFIED = new Set(j.ver || []);
+      NOTIFS = j.n || [];
       videosLoaded = true;
       return true;
     } catch (e) { return false; }
@@ -103,7 +105,8 @@
   function feedSig() {
     return VIDEOS.length + '|' + VIDEOS.map(x => x.id + ':' + (x.views || 0) + ':' + (x.likes || 0) + ':' + (x.parts || 1) + ':' + (x.video_url || '').length + ':' + (x.thumb_url || '').length).join(',').length
       + '|' + Object.keys(CREATORS).map(k => k + CREATORS[k]).join('').length
-      + '|' + Object.keys(AVATARS).length;
+      + '|' + Object.keys(AVATARS).length
+      + '|' + VERIFIED.size + ':' + NOTIFS.length;
   }
 
   function byId(id) { return VIDEOS.find(v => v.id === id); }
@@ -1960,7 +1963,7 @@
     loadVideos().then(() => {
       if (feedSig() !== sig) {
         const p = location.hash.slice(1) || '/';
-        if (/^\/?$|\/home|\/subscriptions|\/library|\/shorts/.test(p)) navigate();
+        if (/^\/?$|\/home|\/subscriptions|\/library|\/shorts|\/c\/|\/channel/.test(p)) navigate();
       }
     }).catch(() => {});
   }
