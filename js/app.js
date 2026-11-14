@@ -253,11 +253,11 @@
   /* ═══════════ avatar & buttons ═══════════ */
   /* channel rank colors (bronze → ruby) */
   const RANKS = {
-    bronze: { hex: '#cd7f32', label: 'Bronze' },
-    silver: { hex: '#c9c9c9', label: 'Silver' },
-    gold:   { hex: '#ffd700', label: 'Gold' },
-    diamond: { hex: '#9be7ff', label: 'Diamond' },
-    ruby:   { hex: '#ff5e7e', label: 'Ruby' },
+    bronze: { hex: '#d9a978', label: 'Bronze' },
+    silver: { hex: '#d6d9e0', label: 'Silver' },
+    gold:   { hex: '#f2d98c', label: 'Gold' },
+    diamond: { hex: '#a9d6ef', label: 'Diamond' },
+    ruby:   { hex: '#f0a1b0', label: 'Ruby' },
   };
   function rankOf(name) {
     const c = (COLORS[name] || '').toLowerCase();
@@ -1219,7 +1219,7 @@
       + '<option value="gold"' + (myRank === 'gold' ? ' selected' : (subsNow >= 1000000 ? '' : ' disabled')) + '>🥇 Gold — 1M followers</option>'
       + '<option value="diamond"' + (myRank === 'diamond' ? ' selected' : (subsNow >= 10000000 ? '' : ' disabled')) + '>💎 Diamond — 10M followers</option>'
       + '<option value="ruby"' + (myRank === 'ruby' ? ' selected' : (subsNow >= 100000000 ? '' : ' disabled')) + '>🔴 Ruby — 100M followers</option>'
-      + '</select><p class="muted-txt">unlocks with followers — colors your name + avatar ring</p></div>'
+      + '</select><p class="muted-txt">unlocks with followers — colors your name + avatar ring everywhere</p></div>'
       + '<div class="field"><label>Banner</label><div class="file-row">'
       + '<button type="button" class="pill-btn ghost" id="banBtn">🌅 Choose banner</button>'
       + '<input type="file" id="banIn" accept="image/*" hidden><span class="muted-txt" id="banMsg"></span></div></div>'
@@ -1228,6 +1228,26 @@
       + '</form></div></div>';
 
     let avaData = c.avatar, banData = c.banner;
+
+    /* channel color applies instantly when picked */
+    const stColorEl = $('#stColor');
+    if (stColorEl) stColorEl.addEventListener('change', () => {
+      const val = stColorEl.value;
+      S.myColor = val || null;
+      if (S.auth && S.auth.token) {
+        saveProfileToAccount({ color: val || null });
+      } else {
+        YV.store.save();
+      }
+      if (val) {
+        COLORS[myName()] = val;
+        toast('Channel color: ' + (RANKS[val] ? RANKS[val].label : val) + ' 🎨', '🎨');
+      } else {
+        delete COLORS[myName()];
+        toast('Channel color removed', '🎨');
+      }
+      navigate(); // re-render with the new color everywhere
+    });
 
     $('#avaBtn').onclick = () => $('#avaIn').click();
     $('#banBtn').onclick = () => $('#banIn').click();
