@@ -1354,6 +1354,23 @@ app.post('/api/admin/creator/color', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
 
+
+/* live chat generator (admin controlled): fake comments into live streams */
+let liveChatCfg = { enabled: false, rateSec: 4 };
+app.post('/api/admin/live/chat', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const enabled = !!(req.body && req.body.enabled);
+    const rateSec = Math.max(1, Math.min(60, parseInt((req.body && req.body.rateSec) || '4', 10) || 4));
+    liveChatCfg = { enabled, rateSec };
+    res.json({ ok: true, ...liveChatCfg });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+app.get('/api/admin/live/chat', async (req, res) => {
+  if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+  res.json(liveChatCfg);
+});
+
 app.post('/api/admin/creator/verify', async (req, res) => {
   try {
     if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
@@ -1536,8 +1553,8 @@ app.post('/api/live/start', async (req, res) => {
     liveStreams.set(id, { id, title, broadcaster: username, token, header: null, segs: [], n: 0, lastSeg: Date.now(), status: 'live', startedAt: Date.now(), thumbUrl, viewersBase, viewersRate });
     try {
       await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,video_url,thumb_url,del_key,parts,sizes,store)
-               values ($1,$2,'','Other','video','LIVE',$3,$4,'',$5,$6,$7,0,'[]','live')`,
-        [id, title, username, 'live:' + id, '', thumbUrl, crypto.randomBytes(16).toString('hex')]);
+               values ($1,$2,'','Other','video','LIVE',$3,$4,'',$5,$6,0,'[]','live')`,
+        [id, title, username, 'live:' + id, thumbUrl, crypto.randomBytes(16).toString('hex')]);
     } catch (e) {}
     res.status(201).json({ id, title, broadcaster: username, viewers: viewersBase });
   } catch (e) {
@@ -1609,6 +1626,25 @@ app.get('/api/live', (req, res) => {
   });
   res.json(out);
 });
+
+
+/* fake live chat generator tick */
+const FAKE_CHAT_NAMES = ['NeonFox', 'CyberWolf', 'PixelCat', 'TurboBanana', 'DarkGamer', 'MoonBoy', 'RobloxKing', 'StreamFan', 'ProGamer', 'LuckyOne'];
+const FAKE_CHAT_TEXTS = ['🔥🔥🔥', 'lets gooo', 'first!!', 'W stream', 'POGGERS', 'how long today?', 'GG', 'the king is live 👑', 'hello 👋', '🔥', 'nice one!', '😍', 'play more!', 'from EU ❤️', 'best streamer'];
+let liveChatTick = 0;
+setInterval(() => {
+  if (!liveChatCfg.enabled) return;
+  liveChatTick++;
+  if (liveChatTick % liveChatCfg.rateSec !== 0) return;
+  liveStreams.forEach(async st => {
+    if (st.status !== 'live') return;
+    const author = FAKE_CHAT_NAMES[crypto.randomInt(FAKE_CHAT_NAMES.length)] + crypto.randomInt(99);
+    const text = FAKE_CHAT_TEXTS[crypto.randomInt(FAKE_CHAT_TEXTS.length)];
+    try {
+      await q('insert into comments (video_id, author, text) values ($1, $2, $3)', [st.id, author, text]);
+    } catch (e) {}
+  });
+}, 1000);
 
 /* auto-end streams whose broadcaster disappeared */
 setInterval(() => {
