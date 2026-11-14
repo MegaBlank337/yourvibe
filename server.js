@@ -30,7 +30,6 @@ const https = require('https');
    instances have no IPv6 egress — force IPv4. */
 try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
 
-const { ExpressPeerServer } = require('peer');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -290,6 +289,7 @@ async function migrate() {
   await q(`alter table videos add column if not exists parts int default 1`);
   await q(`alter table videos add column if not exists sizes jsonb default '[]'`);
   await q(`alter table videos add column if not exists store text default 'sb'`);
+  await q(`alter table videos add column if not exists live_mime text`);
   await q(`alter table videos add column if not exists bunny_guid text`);
   await q(`update videos set bunny_guid = replace(video_path, 'bunny:', '') where store = 'bunny' and bunny_guid is null`);
   await q(`alter table videos add column if not exists merge_state text default 'idle'`);
@@ -308,6 +308,13 @@ async function migrate() {
   await q(`alter table users add column if not exists tokens jsonb default '[]'`);
   await q(`update users set tokens = to_jsonb(array[token]) where token is not null and tokens = '[]'::jsonb`);
   await q(`alter table creators add column if not exists color text`);
+  await q(`create table if not exists support (
+    id bigserial primary key,
+    username text not null,
+    text text not null,
+    from_admin boolean default false,
+    created_at timestamptz default now()
+  )`);
   await q(`create table if not exists notifications (
     id bigserial primary key,
     text text not null,
@@ -1522,6 +1529,37 @@ app.post('/api/admin/video/:id/:action', async (req, res) => {
 });
 
 
+
+/* ── support chat (users ↔ admin) ── */
+app.post('/api/support', async (req, res) => {
+  try {
+    const username = String((req.body && req.body.username) || '').trim().slice(0, 50);
+    const text = String((req.body && req.body.text) || '').trim().slice(0, 500);
+    const fromAdmin = !!(req.body && req.body.fromAdmin);
+    if (!username || !text) return res.status(400).json({ error: 'missing fields' });
+    const r = await q('insert into support (username, text, from_admin) values ($1, $2, $3) returning id, username, text, from_admin, created_at',
+      [username, text, fromAdmin]);
+    res.status(201).json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.get('/api/support', async (req, res) => {
+  try {
+    const username = String(req.query.user || '').trim().slice(0, 50);
+    if (!username) return res.json([]);
+    const r = await q('select id, username, text, from_admin, created_at from support where username = $1 order by id desc limit 100', [username]);
+    res.json(r.rows);
+  } catch (e) { res.json([]); }
+});
+
+app.get('/api/support/all', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const r = await q('select id, username, text, from_admin, created_at from support order by id desc limit 200');
+    res.json(r.rows);
+  } catch (e) { res.json([]); }
+});
+
 /* ═══════════ LIVE STREAMING (in-memory; segments on Supabase CDN) ═══════════ */
 const liveStreams = new Map(); // id -> { id, title, broadcaster, token, header, segs, n, lastSeg, status, startedAt }
 
@@ -1534,6 +1572,7 @@ app.post('/api/live/start', async (req, res) => {
     const token = req.get('x-auth') || '';
     const b = req.body || {};
     const title = String(b.title || '').slice(0, 100) || (username + ' is live');
+    const mime = String(b.mime || '').slice(0, 100);
     const id = crypto.randomUUID();
 
     /* client-captured thumbnail (frame from the preview) → stored instantly */
@@ -1551,11 +1590,11 @@ app.post('/api/live/start', async (req, res) => {
     const viewersBase = 30 + crypto.randomInt(150);
     const viewersRate = 0.5 + Math.random() * 1.8;
 
-    liveStreams.set(id, { id, title, broadcaster: username, token, header: null, segs: [], n: 0, lastSeg: Date.now(), status: 'live', startedAt: Date.now(), thumbUrl, viewersBase, viewersRate });
+    liveStreams.set(id, { id, title, broadcaster: username, token, header: null, segs: [], n: 0, lastSeg: Date.now(), status: 'live', startedAt: Date.now(), thumbUrl, viewersBase, viewersRate, mime, sdp: { offer: null, answers: [] } });
     try {
-      await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,video_url,thumb_url,del_key,parts,sizes,store)
-               values ($1,$2,'','Other','video','LIVE',$3,$4,'',$5,$6,0,'[]','live')`,
-        [id, title, username, 'live:' + id, thumbUrl, crypto.randomBytes(16).toString('hex')]);
+      await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,video_url,thumb_url,del_key,parts,sizes,store,live_mime)
+               values ($1,$2,'','Other','video','LIVE',$3,$4,'',$5,$6,0,'[]','live',$7)`,
+        [id, title, username, 'live:' + id, thumbUrl, crypto.randomBytes(16).toString('hex'), mime]);
     } catch (e) {}
     res.status(201).json({ id, title, broadcaster: username, viewers: viewersBase });
   } catch (e) {
@@ -1573,17 +1612,13 @@ app.post('/api/live/:id/seg', async (req, res) => {
     const chunk = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     if (!chunk.length) return res.status(400).json({ error: 'empty segment' });
 
-    /* chunk 0 carries the webm header; later chunks get it prepended so each
-       segment is a standalone playable file on the CDN */
-    let final = chunk;
-    if (!st.header) {
-      st.header = chunk;
-    } else if (st.segs.length > 0) {
-      final = Buffer.concat([st.header, chunk]);
-    }
+    /* store the RAW MediaRecorder chunk. Chunks concatenated in order are
+       byte-exact valid webm — viewers join them via MediaSource (MSE).
+       (Prepending the header mid-stream created malformed files whose
+       playback resets after a few seconds.) */
     const n = st.n++;
     const path = 'live/' + st.id + '/' + n + '.webm';
-    await sbPut(path, final, 'video/webm');
+    await sbPut(path, chunk, 'video/webm');
     st.segs.push(pubUrl(path));
     st.lastSeg = Date.now();
     res.json({ n, url: pubUrl(path), total: st.segs.length });
@@ -1598,7 +1633,40 @@ app.get('/api/live/:id/playlist', (req, res) => {
   if (!st) return res.json({ status: 'gone' });
   const elapsed = Math.max(1, Math.round((Date.now() - st.startedAt) / 1000));
   const viewers = Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + elapsed * st.viewersRate + crypto.randomInt(15)));
-  res.json({ status: st.status, title: st.title, broadcaster: st.broadcaster, segs: st.segs, startedAt: st.startedAt, thumb: st.thumbUrl, viewers });
+  res.json({ status: st.status, title: st.title, broadcaster: st.broadcaster, segs: st.segs, startedAt: st.startedAt, thumb: st.thumbUrl, mime: st.mime || '', viewers });
+});
+
+
+/* HTTP WebRTC signaling: broadcaster posts the offer, viewers post answers */
+app.get('/api/live/:id/sdp', (req, res) => {
+  const st = liveStreams.get(req.params.id);
+  if (!st || !st.sdp) return res.json({ offer: null, answers: [] });
+  res.json({ offer: st.sdp.offer, answers: st.sdp.answers.filter(a => !a.taken) });
+});
+app.post('/api/live/:id/sdp', (req, res) => {
+  const st = liveStreams.get(req.params.id);
+  if (!st) return res.status(404).json({ error: 'stream not found' });
+  if (req.get('x-auth') !== st.token) return res.status(403).json({ error: 'not the broadcaster' });
+  const sdp = String((req.body && req.body.sdp) || '');
+  if (!sdp.startsWith('v=0')) return res.status(400).json({ error: 'bad sdp' });
+  st.sdp.offer = sdp;
+  st.sdp.answers = [];
+  res.json({ ok: true });
+});
+app.post('/api/live/:id/answer', (req, res) => {
+  const st = liveStreams.get(req.params.id);
+  if (!st || !st.sdp) return res.status(404).json({ error: 'stream not found' });
+  const sdp = String((req.body && req.body.sdp) || '');
+  if (!sdp.startsWith('v=0')) return res.status(400).json({ error: 'bad sdp' });
+  st.sdp.answers.push({ sdp, taken: false });
+  res.json({ ok: true });
+});
+app.post('/api/live/:id/take', (req, res) => {
+  const st = liveStreams.get(req.params.id);
+  if (!st || !st.sdp) return res.json({ ok: true });
+  const sdp = String((req.body && req.body.sdp) || '');
+  st.sdp.answers.forEach(a => { if (a.sdp === sdp) a.taken = true; });
+  res.json({ ok: true });
 });
 
 app.post('/api/live/:id/end', async (req, res) => {
@@ -1662,9 +1730,5 @@ setInterval(() => {
 app.use(express.static(__dirname));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
-/* PeerJS signaling server (websockets) mounted on the same service */
 const httpServer = require('http').createServer(app);
-const peerServer = ExpressPeerServer(httpServer, { debug: false });
-app.use('/peerjs', peerServer);
-
 httpServer.listen(PORT, () => console.log('⚡ YourVibe API on port ' + PORT));
