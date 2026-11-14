@@ -16,6 +16,8 @@
   let cleanups = [];
   let shortsMuted = true;
   let UPLOADING = false; // true while a video upload is in flight
+  /* publisher's local file blob → instant playback of your own just-uploaded video */
+  const LOCAL_PLAYBACK = {}; // videoId -> objectURL
 
   /* don't let a reload kill an active upload */
   window.addEventListener('beforeunload', e => {
@@ -206,8 +208,12 @@
   const viewsOf = v => Number(v.views) || 0;
   const subsOfCreator = name => Number(CREATORS[name]) || 0;
   const agoOf = v => timeAgo(v.created_at ? Date.parse(v.created_at) : 0);
-  /* multi-segment videos stream through the API as one file */
-  const srcOf = v => (Number(v.parts) > 1) ? (API_BASE + '/stream/' + v.id) : v.video_url;
+  /* multi-segment videos stream through the API as one file.
+     Publisher's own fresh bunny video → play the LOCAL file instantly (no encoding wait) */
+  const srcOf = v => {
+    if (LOCAL_PLAYBACK[v.id]) return LOCAL_PLAYBACK[v.id];
+    return (Number(v.parts) > 1) ? (API_BASE + '/stream/' + v.id) : v.video_url;
+  };
 
   function bumpView(v) {
     v.views = (Number(v.views) || 0) + 1;
@@ -529,7 +535,7 @@
     if (!src) return '<div class="player error-box">⚠️ Video unavailable</div>';
     const vert = v.type === 'short';
     /* Bunny CDN videos: placeholder only while Bunny hasn't given us the file */
-    if (/iframe\.mediadelivery\.net/.test(src)) {
+    if (/iframe\.mediadelivery\.net/.test(src) && !LOCAL_PLAYBACK[v.id]) {
       return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer" data-bunny="' + v.id + '">'
         + '<div class="loading-box" style="padding:60px 20px"><div class="spinner"></div><p id="bunnyPct">CDN is encoding your video — 0%</p></div>'
         + '</div>';
@@ -597,7 +603,7 @@
     loadPoll(v.id);
 
     /* bunny video: resolve CDN URLs, play via HLS (adaptive — instant start) */
-    if (v.store === 'bunny' || /iframe\.mediadelivery\.net/.test(srcOf(v) || '')) {
+    if ((v.store === 'bunny' || /iframe\.mediadelivery\.net/.test(srcOf(v) || '')) && !LOCAL_PLAYBACK[v.id]) {
       (async () => {
         for (let i = 0; i < 120; i++) {
           try {
