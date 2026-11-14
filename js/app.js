@@ -1928,8 +1928,14 @@
       + '<div class="admin-row"><input type="text" id="adminNotifTo" maxlength="50" placeholder="to account (empty = everyone)"><span class="muted-txt" style="align-self:center;font-size:13px">leave empty = send to all</span></div>'
       + '<div class="admin-row"><input type="number" id="adminChatRate" min="1" max="60" placeholder="sec between comments"><button class="pill-btn" data-admin="chat-on">💬 Chat ON</button><button class="pill-btn danger" data-admin="chat-off">💬 OFF</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">clears every notification</span><button class="pill-btn danger" data-admin="notif-clear">🗑 Clear notifications</button></div>'
-      + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">user questions arrive here — open the chat</span><button class="pill-btn" data-admin="support-open">📨 Open support chat</button></div>'
-      + '<div class="admin-row" style="flex-direction:column;align-items:stretch" id="adminSupportRow"><div id="adminSupportList" class="adm-sup-list"><span class="muted-txt">Click “Open support chat” to load messages…</span></div><div style="display:flex;gap:8px;margin-top:8px"><input type="text" id="adminSupportTo" maxlength="50" placeholder="reply to (username)"><input type="text" id="adminSupportText" maxlength="500" placeholder="your reply — arrives in their 💬 panel"><button class="pill-btn" data-admin="support-reply">↩ Reply</button></div></div>'
+      + '<div class="admin-row span2"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">user problems arrive here as tickets — click one to open</span><button class="pill-btn" data-admin="support-open">📨 Load tickets</button></div>'
+      + '<div class="span2" id="adminSupportRow">'
+      + '<div id="adminTickets" class="adm-tickets"><span class="muted-txt">Click “Load tickets”…</span></div>'
+      + '<div id="adminThreadView" class="hide">'
+      + '<div class="adm-thread-head"><button class="pill-btn ghost" id="admThreadBack">←</button><b id="admThreadUser" style="flex:1;font-size:14px"></b><button class="pill-btn danger" data-admin="support-close">✅ Close problem</button></div>'
+      + '<div id="admThreadMsgs" class="adm-sup-list"></div>'
+      + '<div style="display:flex;gap:8px;margin-top:8px"><input type="hidden" id="adminSupportTo"><input type="text" id="adminSupportText" maxlength="500" placeholder="your reply — arrives in their 💬 panel"><button class="pill-btn" data-admin="support-reply">↩ Reply</button></div>'
+      + '</div></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">create a poll for the selected video</span><button class="pill-btn" data-admin="poll">📊 Create poll</button></div>'
       + '</div>'
       + '<p class="muted-txt">Applies on the server — everyone sees it. Comments come from randomly generated accounts.</p>'
@@ -1939,10 +1945,13 @@
     $('#adminClose').onclick = () => d.classList.add('hide');
     d.addEventListener('click', e => {
       if (e.target === d) d.classList.add('hide');
-      const r = e.target.closest('[data-sup-reply]');
-      if (r) {
-        const to = $('#adminSupportTo'); if (to) to.value = r.dataset.supReply || '';
-        const tx = $('#adminSupportText'); if (tx) tx.focus();
+      const tk = e.target.closest('[data-ticket]');
+      if (tk) { openAdmThread(tk.dataset.ticket); return; }
+      const bk = e.target.closest('#admThreadBack');
+      if (bk) {
+        const tv = $('#adminThreadView'), cards = $('#adminTickets');
+        if (tv) tv.classList.add('hide');
+        if (cards) cards.classList.remove('hide');
       }
     });
     $('#adminUnlock').onclick = () => {
@@ -1981,34 +1990,77 @@
     }
   }
 
+  let SUPPORT_ALL = [];
+  function admTicketsHTML(all) {
+    const byUser = {};
+    all.forEach(m => { if (!m.from_admin) (byUser[m.username] = byUser[m.username] || []).push(m); });
+    const users = Object.keys(byUser);
+    if (!users.length) return '<span class="muted-txt">No open problems 🎉 — users write via the 💬 button in the header.</span>';
+    return users.map(u => {
+      const msgs = byUser[u];
+      const last = msgs[msgs.length - 1];
+      const preview = (last.text || '').slice(0, 44);
+      return '<button class="adm-ticket" data-ticket="' + esc(u) + '">🎟 <b>' + esc(u) + '</b> — ' + esc(preview)
+        + '<span class="muted-txt" style="margin-left:auto;white-space:nowrap">' + msgs.length + ' msg · ' + (last.created_at ? timeAgo(Date.parse(last.created_at)) : '') + '</span></button>';
+    }).join('');
+  }
+  function admThreadHTML(list) {
+    if (!list.length) return '<span class="muted-txt">Thread is empty.</span>';
+    return list.slice().reverse().map(m =>
+      '<div class="adm-sup">' + (m.from_admin
+        ? '<b style="color:#39ff88">↩ admin</b>: '
+        : '<b>' + esc(m.username) + '</b>: ')
+      + esc(m.text) + ' <span class="muted-txt">· ' + (m.created_at ? timeAgo(Date.parse(m.created_at)) : '') + '</span></div>'
+    ).join('');
+  }
+  function openAdmThread(u) {
+    const tv = $('#adminThreadView'), cards = $('#adminTickets');
+    if (!tv || !cards) return;
+    const list = SUPPORT_ALL.filter(m => m.username === u);
+    const head = $('#admThreadUser'); if (head) head.textContent = u;
+    const msgs = $('#admThreadMsgs'); if (msgs) { msgs.innerHTML = admThreadHTML(list); msgs.scrollTop = msgs.scrollHeight; }
+    const to = $('#adminSupportTo'); if (to) to.value = u;
+    const tx = $('#adminSupportText'); if (tx) { tx.value = ''; setTimeout(() => tx.focus(), 100); }
+    cards.classList.add('hide');
+    tv.classList.remove('hide');
+  }
   async function adminAction(kind) {
     if (kind === 'support-open') {
       try {
         const r = await fetch(API_BASE + '/api/support/all', { headers: { 'X-Admin-Key': ADMIN_KEY } });
-        const list = await r.json();
-        const el = $('#adminSupportList');
-        if (el) {
-          el.innerHTML = list.length ? list.slice().reverse().map(m =>
-            '<div class="adm-sup">' + (m.from_admin
-              ? '<b style="color:#39ff88">↩ admin → ' + esc(m.username) + '</b>: '
-              : '<b>' + esc(m.username) + '</b>: ')
-            + esc(m.text) + ' <span class="muted-txt">· ' + (m.created_at ? timeAgo(Date.parse(m.created_at)) : '') + '</span>'
-            + (m.from_admin ? '' : ' <button class="pill-btn" data-sup-reply="' + esc(m.username) + '" style="padding:1px 8px;font-size:11px">↩</button>')
-            + '</div>'
-          ).join('') : '<span class="muted-txt">No support messages yet — users write via the 💬 button in the header.</span>';
-        }
-      } catch (e) { toast('Failed to load support chat', '⚠️'); }
+        SUPPORT_ALL = await r.json();
+        const el = $('#adminTickets');
+        if (el) el.innerHTML = admTicketsHTML(SUPPORT_ALL);
+      } catch (e) { toast('Failed to load tickets', '⚠️'); }
       return;
     }
     if (kind === 'support-reply') {
       const to = ($('#adminSupportTo') && $('#adminSupportTo').value || '').trim();
       const text = ($('#adminSupportText') && $('#adminSupportText').value || '').trim();
-      if (!to || !text) { toast('Need username + reply text', '⚠️'); return; }
+      if (!to || !text) { toast('Write a reply first', '⚠️'); return; }
       try {
         await api('/api/support', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: to, text, fromAdmin: true }) });
         const tx = $('#adminSupportText'); if (tx) tx.value = '';
         toast('Reply sent to ' + to + ' 💌', '↩');
-        adminAction('support-open');
+        const r2 = await fetch(API_BASE + '/api/support/all', { headers: { 'X-Admin-Key': ADMIN_KEY } });
+        SUPPORT_ALL = await r2.json();
+        openAdmThread(to);
+        const cards = $('#adminTickets');
+        if (cards) cards.innerHTML = admTicketsHTML(SUPPORT_ALL);
+      } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
+    if (kind === 'support-close') {
+      const to = ($('#adminSupportTo') && $('#adminSupportTo').value || '').trim();
+      if (!to) { toast('No ticket is open', '⚠️'); return; }
+      try {
+        await fetch(API_BASE + '/api/support?user=' + encodeURIComponent(to), { method: 'DELETE', headers: { 'X-Admin-Key': ADMIN_KEY } });
+        toast('Problem closed — chat cleared for both sides ✅', '✅');
+        const tv = $('#adminThreadView'), cards = $('#adminTickets');
+        if (tv) tv.classList.add('hide');
+        const r2 = await fetch(API_BASE + '/api/support/all', { headers: { 'X-Admin-Key': ADMIN_KEY } });
+        SUPPORT_ALL = await r2.json();
+        if (cards) { cards.innerHTML = admTicketsHTML(SUPPORT_ALL); cards.classList.remove('hide'); }
       } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
       return;
     }
