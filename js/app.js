@@ -674,10 +674,11 @@
     function sync() {
       playB.textContent = V.paused ? '▶' : '⏸';
       big.classList.toggle('hide', !V.paused);
+      P.classList.toggle('is-playing', !V.paused);   // CSS-driven, always in sync
       muteB.textContent = (V.muted || V.volume === 0) ? '🔇' : '🔊';
     }
 
-    V.addEventListener('play', sync); V.addEventListener('pause', sync); V.addEventListener('volumechange', sync);
+    V.addEventListener('play', sync); V.addEventListener('playing', sync); V.addEventListener('pause', sync); V.addEventListener('volumechange', sync); V.addEventListener('timeupdate', sync);
     V.addEventListener('timeupdate', () => { const d = V.duration || 0; setFill(d ? V.currentTime / d : 0); timeEl.textContent = fmt(V.currentTime) + ' / ' + fmt(d); });
     let playerRecovered = false;
     V.addEventListener('error', async () => {
