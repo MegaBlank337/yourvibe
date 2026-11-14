@@ -961,18 +961,19 @@ body.has-ann main { padding-top: 138px; }
 
 /* ══════════ CHANNEL RANK (bronze..ruby) ══════════ */
 .rank-name, .ranked-name {
-  animation: rankGlow 3s ease-in-out infinite;
+  animation: rankGlow 6s ease-in-out infinite;
 }
 @keyframes rankGlow {
-  0%, 100% { text-shadow: 0 0 6px currentColor; }
-  50% { text-shadow: 0 0 16px currentColor, 0 0 26px currentColor; }
+  0%, 100% { text-shadow: 0 0 5px currentColor; }
+  50% { text-shadow: 0 0 12px currentColor; }
 }
 .av[style*="--rank"] {
-  animation: rankRing 3s ease-in-out infinite;
+  box-shadow: 0 0 8px 1px var(--rank);
+  animation: rankRing 6s ease-in-out infinite;
 }
 @keyframes rankRing {
-  0%, 100% { box-shadow: 0 0 6px 1px var(--rank); }
-  50% { box-shadow: 0 0 14px 3px var(--rank), 0 0 22px 2px var(--rank); }
+  0%, 100% { box-shadow: 0 0 5px 1px var(--rank); }
+  50% { box-shadow: 0 0 10px 2px var(--rank); }
 }
 
 /* ══════════ CHANNEL RANK (bronze..ruby) ══════════ */
