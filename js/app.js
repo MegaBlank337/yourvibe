@@ -2149,12 +2149,25 @@
         btn.disabled = false; btn.textContent = '🔴 Go Live';
         return;
       }
+      /* sound check: screen shares only carry audio if "Share audio" was checked */
+      if (!stream.getAudioTracks().length) {
+        toast('No sound! Enable "Share audio" in the share dialog, or pick Camera to use your mic', '🔇');
+        if (src === 'screen') {
+          /* try to attach mic audio as a fallback so there IS sound */
+          try {
+            const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mic.getAudioTracks().forEach(at => stream.addTrack(at));
+            toast('Microphone added for sound 🎤', '🎤');
+          } catch (e) { /* user declined mic — stream stays silent */ }
+        }
+      }
+
       const title = ($('#liveTitle').value || '').trim() || (myName() + ' is live');
 
       /* connect preview FIRST, wait for a frame, then capture the thumbnail */
       const pv = $('#livePrev'); pv.srcObject = stream;
       if (!liveThumb) {
-        await new Promise(r => setTimeout(r, 800));
+        await new Promise(r => setTimeout(r, 1200));
         try {
           const cv = document.createElement('canvas');
           cv.width = 640; cv.height = 360;
@@ -2211,17 +2224,21 @@
       liveRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000 });
       liveRecorder.ondataavailable = async e => {
         if (!e.data || !e.data.size || !liveStreamId) return;
-        const ctrl = new AbortController();
-        const killer = setTimeout(() => ctrl.abort(), 20000);
-        try {
-          const r = await fetch(API_BASE + '/api/live/' + id + '/seg', {
-            method: 'POST',
-            headers: { 'X-Auth': (S.auth && S.auth.token) || '', 'Content-Type': 'application/octet-stream' },
-            body: e.data, signal: ctrl.signal
-          });
-          clearTimeout(killer);
-          liveChunksSent = (r.status === 200) ? (liveChunksSent + 1) : liveChunksSent;
-        } catch (e2) { clearTimeout(killer); /* chunk lost — live TV glitch, keep going */ }
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          const ctrl = new AbortController();
+          const killer = setTimeout(() => ctrl.abort(), 20000);
+          try {
+            const r = await fetch(API_BASE + '/api/live/' + id + '/seg', {
+              method: 'POST',
+              headers: { 'X-Auth': (S.auth && S.auth.token) || '', 'Content-Type': 'application/octet-stream' },
+              body: e.data, signal: ctrl.signal
+            });
+            clearTimeout(killer);
+            if (r.status === 200) { liveChunksSent++; break; }
+            if (r.status === 410) { clearTimeout(killer); break; } // stream ended server-side
+          } catch (e2) { clearTimeout(killer); }
+          if (attempt < 3) await new Promise(r => setTimeout(r, 1500));
+        }
       };
       liveRecorder.start(3000);
     };
