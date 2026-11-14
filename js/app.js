@@ -267,7 +267,10 @@
   /* verified badge next to a creator name */
   function nameHTML(name, cls) {
     const badge = VERIFIED.has(name) ? ' <span class="vrf-badge" title="Verified">✓</span>' : '';
-    return '<span' + (cls ? ' class="' + cls + '"' : '') + '>' + esc(name) + badge + '</span>';
+    const rk = rankOf(name);
+    const style = rk ? ' style="color:' + rk.hex + ';text-shadow:0 0 10px ' + rk.hex + '88"' : '';
+    const klass = (cls ? ' class="' + cls + (rk ? ' ranked-name' : '') + '"' : (rk ? ' class="ranked-name"' : ''));
+    return '<span' + klass + style + '>' + esc(name) + badge + '</span>';
   }
 
   function avatarHTML(c, size) {
@@ -279,10 +282,12 @@
       ch = { name: myName(), colors: S.myChannel.colors };
     }
     const p = (ch && ch.colors) ? ch.colors : palFor(ch && ch.name);
+    const rk = rankOf(ch && ch.name);
+    const rankStyle = rk ? ';--rank:' + rk.hex : '';
     const accAvatar = AVATARS[((ch && ch.name) || '').toLowerCase()];
-    if (accAvatar) return '<span class="av av-img" style="width:' + size + 'px;height:' + size + 'px"><img src="' + accAvatar + '" alt=""></span>';
+    if (accAvatar) return '<span class="av av-img" style="width:' + size + 'px;height:' + size + 'px' + rankStyle + '"><img src="' + accAvatar + '" alt=""></span>';
     const letter = ((ch && ch.name) || '?').trim().charAt(0).toUpperCase();
-    return '<span class="av" style="width:' + size + 'px;height:' + size + 'px;--c1:' + p[0] + ';--c2:' + p[1] + '">' + letter + '</span>';
+    return '<span class="av" style="width:' + size + 'px;height:' + size + 'px;--c1:' + p[0] + ';--c2:' + p[1] + rankStyle + '">' + letter + '</span>';
   }
 
   function subBtnHTML(name, small) {
