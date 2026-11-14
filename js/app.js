@@ -550,7 +550,7 @@
       + '<div class="v-spin" id="yvSpin"><i></i></div>'
       + '<button class="big-play" id="yvBig" aria-label="Play">▶</button>'
       + '<div class="controls">'
-      + '<div class="seek" id="yvSeek"><div class="seek-fill" id="yvFill"><i class="seek-knob"></i></div></div>'
+      + '<div class="seek" id="yvSeek"><div class="seek-buffer" id="yvBuf"></div><div class="seek-fill" id="yvFill"><i class="seek-knob"></i></div></div>'
       + '<div class="ctl-row">'
       + '<button class="ctl-btn" id="yvPlayB" title="Play / Pause (k)">⏸</button>'
       + '<button class="ctl-btn" id="yvMute" title="Mute (m)">🔊</button>'
