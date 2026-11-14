@@ -674,8 +674,14 @@
     if (v.store === 'live') {
       let segs = [];
       try { segs = JSON.parse(v.sizes || '[]'); } catch (e) {}
-      if (!Array.isArray(segs) || !segs.length) {
-        main.innerHTML = '<div class="page"><div class="empty"><div class="empty-ico">📡</div><h3>VOD unavailable</h3></div></div>';
+      if (!Array.isArray(segs)) segs = [];
+      /* not finalized yet — if the stream is still LIVE, jump to the live page */
+      if (!segs.length) {
+        try {
+          const pl = await api('/api/live/' + v.id + '/playlist');
+          if (pl && pl.status === 'live') { location.hash = '#/live/' + v.id; return; }
+        } catch (e) {}
+        main.innerHTML = '<div class="page"><div class="empty"><div class="empty-ico">📡</div><h3>VOD unavailable</h3><p>This stream has no recording.</p></div></div>';
         return;
       }
       main.innerHTML = '<div class="watch">'
@@ -705,16 +711,6 @@
         + '<div class="w-desc"><b>' + fmtNum(viewsOf(v)) + ' views · ' + agoOf(v) + ' · 🔴 was LIVE</b><br>' + esc(v.description || '') + '</div>'
         + '<div id="comments-slot">' + loadingHTML() + '</div>'
         + '</div></div>';
-
-      /* not finalized yet — if the stream is still LIVE, jump to the live page */
-      if (!segs.length) {
-        try {
-          const pl = await api('/api/live/' + v.id + '/playlist');
-          if (pl && pl.status === 'live') { location.hash = '#/live/' + v.id; return; }
-        } catch (e) {}
-        main.innerHTML = '<div class="page"><div class="empty"><div class="empty-ico">📡</div><h3>VOD unavailable</h3><p>This stream has no recording.</p></div></div>';
-        return;
-      }
 
       const nv = $('#yvVideo');
       const segLabel = $('#liveSeg');
@@ -775,7 +771,10 @@
       } else vodSeq();
 
       /* ── old-format VOD (header-prepended standalone files): sequential ── */
+      let seqDone = false;
       function vodSeq() {
+        if (seqDone) return;
+        seqDone = true;
         let segI = 0;
         const loadSeg = i => {
           segI = Math.max(0, Math.min(segs.length - 1, i));
