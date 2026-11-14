@@ -2187,7 +2187,13 @@
         btn.disabled = true; btn.textContent = '⏳ Ending…';
         try { if (liveRecorder && liveRecorder.state !== 'inactive') { liveRecorder.stop(); await new Promise(r => setTimeout(r, 1500)); } } catch (e) {}
         stream.getTracks().forEach(tr => tr.stop());
-        try { await api('/api/live/' + id + '/end', { method: 'POST' }); } catch (e) {}
+        /* hard 8s timeout — the button ALWAYS finishes even if the server hangs */
+        try {
+          const ctrl = new AbortController();
+          const killer = setTimeout(() => ctrl.abort(), 8000);
+          await fetch(API_BASE + '/api/live/' + id + '/end', { method: 'POST', headers: { 'X-Auth': (S.auth && S.auth.token) || '' }, signal: ctrl.signal });
+          clearTimeout(killer);
+        } catch (e) { /* server will auto-end this stream after 45s without segments */ }
         toast('Stream ended', '🔴');
         liveRecorder = null; liveStreamId = null; UPLOADING = false;
         if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
@@ -2205,10 +2211,17 @@
       liveRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000 });
       liveRecorder.ondataavailable = async e => {
         if (!e.data || !e.data.size || !liveStreamId) return;
+        const ctrl = new AbortController();
+        const killer = setTimeout(() => ctrl.abort(), 20000);
         try {
-          const r = await api('/api/live/' + id + '/seg', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: e.data });
-          liveChunksSent = (r && r.total) || (liveChunksSent + 1);
-        } catch (e2) { /* retry on next chunk */ }
+          const r = await fetch(API_BASE + '/api/live/' + id + '/seg', {
+            method: 'POST',
+            headers: { 'X-Auth': (S.auth && S.auth.token) || '', 'Content-Type': 'application/octet-stream' },
+            body: e.data, signal: ctrl.signal
+          });
+          clearTimeout(killer);
+          liveChunksSent = (r.status === 200) ? (liveChunksSent + 1) : liveChunksSent;
+        } catch (e2) { clearTimeout(killer); /* chunk lost — live TV glitch, keep going */ }
       };
       liveRecorder.start(3000);
     };
