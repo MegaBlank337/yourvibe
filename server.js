@@ -1503,6 +1503,84 @@ app.post('/api/admin/video/:id/:action', async (req, res) => {
   }
 });
 
+
+/* ═══════════ LIVE STREAMING (in-memory; segments on Supabase CDN) ═══════════ */
+const liveStreams = new Map(); // id -> { id, title, broadcaster, token, header, segs, n, lastSeg, status, startedAt }
+
+app.use('/api/live', express.raw({ type: 'application/octet-stream', limit: '25mb' }));
+
+app.post('/api/live/start', async (req, res) => {
+  try {
+    const username = await authUser(req);
+    if (!username) return res.status(401).json({ error: 'log in to go live' });
+    const token = req.get('x-auth') || '';
+    const title = String((req.body && req.body.title) || '').slice(0, 100) || (username + ' is live');
+    const id = crypto.randomUUID();
+    liveStreams.set(id, { id, title, broadcaster: username, token, header: null, segs: [], n: 0, lastSeg: Date.now(), status: 'live', startedAt: Date.now() });
+    res.status(201).json({ id, title, broadcaster: username });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.post('/api/live/:id/seg', async (req, res) => {
+  try {
+    const st = liveStreams.get(req.params.id);
+    if (!st) return res.status(404).json({ error: 'stream not found' });
+    if (req.get('x-auth') !== st.token) return res.status(403).json({ error: 'not the broadcaster' });
+    if (st.status !== 'live') return res.status(410).json({ error: 'stream ended' });
+    const chunk = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (!chunk.length) return res.status(400).json({ error: 'empty segment' });
+
+    /* chunk 0 carries the webm header; later chunks get it prepended so each
+       segment is a standalone playable file on the CDN */
+    let final = chunk;
+    if (!st.header) {
+      st.header = chunk;
+    } else if (st.segs.length > 0) {
+      final = Buffer.concat([st.header, chunk]);
+    }
+    const n = st.n++;
+    const path = 'live/' + st.id + '/' + n + '.webm';
+    await sbPut(path, final, 'video/webm');
+    st.segs.push(pubUrl(path));
+    st.lastSeg = Date.now();
+    res.json({ n, url: pubUrl(path), total: st.segs.length });
+  } catch (e) {
+    console.error('live seg error:', e.message);
+    res.status(500).json({ error: 'segment upload failed' });
+  }
+});
+
+app.get('/api/live/:id/playlist', (req, res) => {
+  const st = liveStreams.get(req.params.id);
+  if (!st) return res.json({ status: 'gone' });
+  res.json({ status: st.status, title: st.title, broadcaster: st.broadcaster, segs: st.segs, startedAt: st.startedAt });
+});
+
+app.post('/api/live/:id/end', (req, res) => {
+  const st = liveStreams.get(req.params.id);
+  if (!st) return res.status(404).json({ error: 'not found' });
+  if (req.get('x-auth') !== st.token) return res.status(403).json({ error: 'not the broadcaster' });
+  st.status = 'ended';
+  res.json({ ok: true, segments: st.segs.length });
+});
+
+app.get('/api/live', (req, res) => {
+  const out = [];
+  liveStreams.forEach(st => { if (st.status === 'live') out.push({ id: st.id, title: st.title, broadcaster: st.broadcaster, startedAt: st.startedAt }); });
+  res.json(out);
+});
+
+/* auto-end streams whose broadcaster disappeared */
+setInterval(() => {
+  const now = Date.now();
+  liveStreams.forEach(st => {
+    if (st.status === 'live' && now - st.lastSeg > 45000) {
+      st.status = 'ended';
+      console.log('live stream auto-ended:', st.id);
+    }
+  });
+}, 20000);
+
 /* ── static app ── */
 app.use(express.static(__dirname));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
