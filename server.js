@@ -303,6 +303,12 @@ async function migrate() {
   await q(`alter table users add column if not exists avatar_url text`);
   await q(`alter table users add column if not exists banner_url text`);
   await q(`alter table users add column if not exists bio text`);
+  await q(`alter table creators add column if not exists verified boolean default false`);
+  await q(`create table if not exists notifications (
+    id bigserial primary key,
+    text text not null,
+    created_at timestamptz default now()
+  )`);
   await q(`create table if not exists polls (
     id uuid primary key default gen_random_uuid(),
     video_id uuid references videos(id) on delete cascade,
@@ -542,10 +548,11 @@ app.get('/api/boot', async (req, res) => {
     const vids = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,store,created_at
                           from videos order by created_at desc limit 200`);
     let creators = {};
+    const verifiedNames = [];
     try {
       await q('insert into creators (name, subs) select distinct uploader, 0 from videos on conflict (name) do nothing');
-      const cr = await q('select name, subs from creators');
-      cr.rows.forEach(r => { creators[r.name] = num(r.subs); });
+      const cr = await q('select name, subs, verified from creators');
+      cr.rows.forEach(r => { creators[r.name] = num(r.subs); if (r.verified) verifiedNames.push(r.name); });
     } catch (e) {}
     const avatars = {};
     try {
@@ -570,11 +577,16 @@ app.get('/api/boot', async (req, res) => {
         me = r.rows[0] || { username: u };
       } catch (e) { me = { username: u }; }
     }
+    let notifications = [];
+    try {
+      const nt = await q('select id, text, created_at from notifications order by id desc limit 10');
+      notifications = nt.rows;
+    } catch (e) {}
     res.json({
       videos: vids.rows.map(row => Object.assign({}, row, {
         views: num(row.views), likes: num(row.likes), parts: Math.max(1, Number(row.parts) || 1),
       })),
-      creators, avatars, announcement, me,
+      creators, avatars, announcement, me, verified: verifiedNames, notifications,
     });
   } catch (e) { res.status(500).json({ error: 'boot failed' }); }
 });
@@ -1275,7 +1287,60 @@ app.get('/api/announcement', async (req, res) => {
   } catch (e) { res.json(null); }
 });
 
+
+/* thumbnail proxy: bunny CDN requires a referer and 403s some img requests —
+   serve thumbs same-origin instead (browser-cacheable) */
+app.get('/api/thumb/:id', async (req, res) => {
+  try {
+    const r = await q('select thumb_url from videos where id = $1', [req.params.id]);
+    if (!r.rows.length || !r.rows[0].thumb_url) { res.status(404).end(); return; }
+    const url = r.rows[0].thumb_url;
+    const headers = url.includes('vz-') || url.includes('b-cdn')
+      ? { Referer: 'https://yourvibe-9uqv.onrender.com/' }
+      : {};
+    const up = await fetch(url, { headers });
+    if (!up.ok) { res.status(up.status).end(); return; }
+    res.setHeader('Content-Type', up.headers.get('content-type') || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    const buf = Buffer.from(await up.arrayBuffer());
+    res.end(buf);
+  } catch (e) { res.status(500).end(); }
+});
+
 /* ── ADMIN (panel opens with F4 in the app) ── */
+
+app.post('/api/admin/creator/verify', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const name = String((req.body && req.body.name) || '').trim().slice(0, 50);
+    const verified = !!(req.body && req.body.verified);
+    if (!name) return res.status(400).json({ error: 'missing name' });
+    const r = await q('update creators set verified = $2 where name = $1 returning name, verified', [name, verified]);
+    if (!r.rows.length) {
+      await q('insert into creators (name, subs, verified) values ($1, 0, $2) on conflict (name) do update set verified = $2', [name, verified]);
+    }
+    res.json({ ok: true, name, verified });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.post('/api/admin/notification', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const text = String((req.body && req.body.text) || '').trim().slice(0, 300);
+    if (!text) return res.status(400).json({ error: 'empty notification' });
+    const r = await q('insert into notifications (text) values ($1) returning id, text, created_at', [text]);
+    res.status(201).json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.delete('/api/admin/notification', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    await q('delete from notifications');
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
 app.post('/api/admin/announcement', async (req, res) => {
   try {
     if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
