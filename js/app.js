@@ -2067,11 +2067,14 @@
     }
   });
 
-  /* ═══════════ LIVE STREAMING ═══════════ */
+  /* ═══════════ LIVE STREAMING (v2 — broadcast follows you on any page) ═══════════ */
   let liveRecorder = null;
   let liveStreamId = null;
   let liveChunksSent = 0;
   let liveTimer = null;
+  let liveEnding = false;
+  let liveMime = '';
+  let liveRawStream = null;
 
   function pickMime() {
     const cands = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm'];
@@ -2079,12 +2082,99 @@
     return '';
   }
 
-  /* GO LIVE page: choose screen or camera */
+  /* floating control bar — lives on document.body, survives any navigation */
+  function buildLiveBar(title) {
+    removeLiveBar();
+    const bar = document.createElement('div');
+    bar.id = 'liveBar';
+    bar.innerHTML = '<span class="lb-badge"><span class="live-dot"></span>LIVE</span>'
+      + '<span class="lb-title">' + esc(title) + '</span>'
+      + '<span class="lb-stat" id="lbTime">0:00</span>'
+      + '<span class="lb-stat" id="lbSegs">0 segs</span>'
+      + '<span class="lb-stat" id="lbViewers">👁 …</span>'
+      + '<button class="lb-end" id="lbEnd">⏹ End stream</button>';
+    document.body.appendChild(bar);
+    return bar;
+  }
+  function removeLiveBar() { const b = document.getElementById('liveBar'); if (b) b.remove(); }
+
+  async function startBroadcast(stream, title, thumb, mime) {
+    const r = await api('/api/live/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, thumb }) });
+    liveStreamId = r.id; liveChunksSent = 0; liveEnding = false;
+    UPLOADING = true; // block auto-update reloads while broadcasting
+
+    buildLiveBar(title);
+    const bar = document.getElementById('liveBar');
+    const btn = $('#lbEnd');
+    btn.onclick = () => endBroadcast();
+
+    let secs = 0;
+    liveTimer = setInterval(async () => {
+      secs++;
+      const tm = $('#lbTime'), sg = $('#lbSegs'), vw = $('#lbViewers');
+      if (tm) tm.textContent = Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
+      try {
+        const pl = await api('/api/live/' + liveStreamId + '/playlist');
+        if (sg) sg.textContent = (pl.segs || []).length + ' segs';
+        if (vw) vw.textContent = '👁 ' + (pl.viewers || 0).toLocaleString('en-US') + ' watching';
+      } catch (e) {}
+    }, 1000);
+
+    /* recorder: 3s segments → direct to CDN via the API */
+    liveRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000 });
+    liveRecorder.ondataavailable = async e => {
+      if (!e.data || !e.data.size || !liveStreamId) return;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const ctrl = new AbortController();
+        const killer = setTimeout(() => ctrl.abort(), 20000);
+        try {
+          const rr = await fetch(API_BASE + '/api/live/' + liveStreamId + '/seg', {
+            method: 'POST',
+            headers: { 'X-Auth': (S.auth && S.auth.token) || '', 'Content-Type': 'application/octet-stream' },
+            body: e.data, signal: ctrl.signal
+          });
+          clearTimeout(killer);
+          if (rr.status === 200) { liveChunksSent++; break; }
+          if (rr.status === 410) { clearTimeout(killer); break; }
+        } catch (e2) { clearTimeout(killer); }
+        if (attempt < 3) await new Promise(rr => setTimeout(rr, 1500));
+      }
+      const sg = document.getElementById('lbSegs');
+      if (sg) sg.textContent = liveChunksSent + ' segs';
+    };
+    liveRecorder.start(3000);
+  }
+
+  async function endBroadcast() {
+    if (liveEnding) return;
+    liveEnding = true;
+    const sid = liveStreamId;
+    try { if (liveRecorder && liveRecorder.state !== 'inactive') { liveRecorder.stop(); await new Promise(r => setTimeout(r, 1500)); } } catch (e) {}
+    if (liveRawStream) { try { liveRawStream.getTracks().forEach(tr => tr.stop()); } catch (e) {} }
+    /* hard timeout — the end call can't hang the UI */
+    try {
+      const ctrl = new AbortController();
+      const killer = setTimeout(() => ctrl.abort(), 8000);
+      await fetch(API_BASE + '/api/live/' + sid + '/end', { method: 'POST', headers: { 'X-Auth': (S.auth && S.auth.token) || '' }, signal: ctrl.signal });
+      clearTimeout(killer);
+    } catch (e) { /* server auto-ends after 45s without segments */ }
+    toast('Stream ended', '🔴');
+    liveRecorder = null; liveStreamId = null; liveRawStream = null; UPLOADING = false;
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+    removeLiveBar();
+  }
+
+  /* GO LIVE page: choose screen or camera, pick thumbnail, start */
   function viewGoLive() {
     if (!S.auth || !S.auth.token) {
       main.innerHTML = '<div class="page"><div class="auth-card"><h1 class="page-title">Go Live</h1>'
         + '<p class="muted-txt">Log in to start a live stream.</p>'
         + '<a class="btn-neon" href="#/login" style="justify-content:center">Log in</a></div></div>';
+      return;
+    }
+    if (liveStreamId) {
+      main.innerHTML = '<div class="page"><div class="empty"><div class="empty-ico">🔴</div><h3>You are LIVE right now</h3>'
+        + '<p class="muted-txt">Use the red control bar at the bottom of the screen to end the stream — it stays there on every page.</p></div></div>';
       return;
     }
     const mime = pickMime();
@@ -2094,7 +2184,7 @@
     }
     main.innerHTML = '<div class="page live-page">'
       + '<h1 class="page-title">Go Live 🔴</h1>'
-      + '<p class="muted-txt">Broadcast your screen or camera — viewers watch with a ~10 second delay.</p>'
+      + '<p class="muted-txt">Broadcast your screen or camera — viewers watch with a ~10 second delay. You can browse the site while live: the red control bar stays with you.</p>'
       + '<div class="up-grid">'
       + '<div class="live-preview"><video id="livePrev" muted playsinline autoplay></video><div class="live-off" id="liveOff">Preview off</div></div>'
       + '<form class="up-form" id="liveForm">'
@@ -2113,12 +2203,12 @@
       + '<button class="btn-neon live-btn" id="liveStart" type="button">🔴 Go Live</button>'
       + '</form></div></div>';
 
-    /* thumbnail state: captured frame or uploaded image */
     let liveThumb = null;
     const showThumbPreview = dataUrl => {
       liveThumb = dataUrl;
-      const prev = document.querySelector('#thumbPreviewWrap');
-      if (prev) { prev.src = dataUrl; prev.parentElement.classList.remove('hide'); }
+      const w = document.querySelector('#thumbPreviewWrap');
+      const box = document.querySelector('#thumbPreviewBox');
+      if (w && box) { w.classList.remove('hide'); box.src = dataUrl; }
     };
 
     $('#thumbCapBtn').onclick = async () => {
@@ -2153,11 +2243,12 @@
         btn.disabled = false; btn.textContent = '🔴 Go Live';
         return;
       }
+      liveRawStream = stream;
+
       /* sound check: screen shares only carry audio if "Share audio" was checked */
       if (!stream.getAudioTracks().length) {
         toast('No sound! Enable "Share audio" in the share dialog, or pick Camera to use your mic', '🔇');
         if (src === 'screen') {
-          /* try to attach mic audio as a fallback so there IS sound */
           try {
             const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
             mic.getAudioTracks().forEach(at => stream.addTrack(at));
@@ -2168,92 +2259,39 @@
 
       const title = ($('#liveTitle').value || '').trim() || (myName() + ' is live');
 
-      /* connect preview FIRST, wait for a frame, then capture the thumbnail */
-      const pv = $('#livePrev'); pv.srcObject = stream;
-      if (!liveThumb) {
-        await new Promise(r => setTimeout(r, 1200));
+      /* thumbnail: chosen one wins, otherwise capture a frame from the preview */
+      let thumb = liveThumb;
+      if (!thumb) {
+        pv2 = $('#livePrev'); // preview already connected
+        await new Promise(r => setTimeout(r, 800));
         try {
           const cv = document.createElement('canvas');
           cv.width = 640; cv.height = 360;
-          cv.getContext('2d').drawImage(pv, 0, 0, 640, 360);
-          liveThumb = cv.toDataURL('image/jpeg', 0.8);
+          cv.getContext('2d').drawImage(pv2 || $('#livePrev'), 0, 0, 640, 360);
+          thumb = cv.toDataURL('image/jpeg', 0.8);
         } catch (e) {}
       }
 
-      let id;
+      const pvOff = $('#liveOff'); if (pvOff) pvOff.remove();
+
       try {
-        const r = await api('/api/live/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, thumb: liveThumb }) });
-        id = r.id;
+        await startBroadcast(stream, title, thumb, mime);
       } catch (e) {
         $('#liveErr').textContent = '⚠️ ' + (e.message || 'server error');
         stream.getTracks().forEach(tr => tr.stop());
         btn.disabled = false; btn.textContent = '🔴 Go Live';
         return;
       }
-      liveStreamId = id; liveChunksSent = 0;
-      UPLOADING = true;   // broadcast in progress — block auto-updates
-      const off = $('#liveOff'); if (off) off.remove();
-
-      /* End stream: stop recording, flush the last segment, then end on the server */
-      let ending = false;
-      btn.textContent = '⏹ End stream';
-      btn.disabled = false;
-      btn.onclick = async () => {
-        if (ending) return;
-        ending = true;
-        btn.disabled = true; btn.textContent = '⏳ Ending…';
-        try { if (liveRecorder && liveRecorder.state !== 'inactive') { liveRecorder.stop(); await new Promise(r => setTimeout(r, 1500)); } } catch (e) {}
-        stream.getTracks().forEach(tr => tr.stop());
-        /* hard 8s timeout — the button ALWAYS finishes even if the server hangs */
-        try {
-          const ctrl = new AbortController();
-          const killer = setTimeout(() => ctrl.abort(), 8000);
-          await fetch(API_BASE + '/api/live/' + id + '/end', { method: 'POST', headers: { 'X-Auth': (S.auth && S.auth.token) || '' }, signal: ctrl.signal });
-          clearTimeout(killer);
-        } catch (e) { /* server will auto-end this stream after 45s without segments */ }
-        toast('Stream ended', '🔴');
-        liveRecorder = null; liveStreamId = null; UPLOADING = false;
-        if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
-        location.hash = '#/live/' + id;
-      };
-
-      let secs = 0;
-      liveTimer = setInterval(async () => {
-        secs++;
-        let viewers = '';
-        try { const pl = await api('/api/live/' + id + '/playlist'); viewers = ' · 👁 ' + (pl.viewers || 0).toLocaleString('en-US'); } catch (e) {}
-        btn.textContent = '⏹ End — ' + Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0') + ' · ' + liveChunksSent + ' segs' + viewers;
-      }, 1000);
-
-      liveRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000 });
-      liveRecorder.ondataavailable = async e => {
-        if (!e.data || !e.data.size || !liveStreamId) return;
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          const ctrl = new AbortController();
-          const killer = setTimeout(() => ctrl.abort(), 20000);
-          try {
-            const r = await fetch(API_BASE + '/api/live/' + id + '/seg', {
-              method: 'POST',
-              headers: { 'X-Auth': (S.auth && S.auth.token) || '', 'Content-Type': 'application/octet-stream' },
-              body: e.data, signal: ctrl.signal
-            });
-            clearTimeout(killer);
-            if (r.status === 200) { liveChunksSent++; break; }
-            if (r.status === 410) { clearTimeout(killer); break; } // stream ended server-side
-          } catch (e2) { clearTimeout(killer); }
-          if (attempt < 3) await new Promise(r => setTimeout(r, 1500));
-        }
-      };
-      liveRecorder.start(3000);
+      /* broadcasting — jump to the stream page; the red bar stays with you */
+      location.hash = '#/live/' + liveStreamId;
     };
   }
 
-  /* VIEWER: sequential segment player (starts at the live edge) */
+  /* VIEWER: sequential segment player (starts at the live edge) + chat */
   async function viewLiveStream(id) {
     main.innerHTML = '<div class="page live-view-page"><div class="loading-box"><div class="spinner"></div><p>Connecting to the stream…</p></div></div>';
     let segIdx = -1;
     let ended = false;
-    let gone = false;
 
     for (let i = 0; i < 120; i++) {
       let pl;
@@ -2262,7 +2300,7 @@
         main.innerHTML = '<div class="page"><div class="empty"><div class="empty-ico">📡</div><h3>Stream offline</h3><p>This live stream has ended or never existed.</p><a class="btn-neon" href="#/home">Back home</a></div></div>';
         return;
       }
-      if (pl.segs && pl.segs.length >= 2) break; // enough to join at the live edge
+      if (pl.segs && pl.segs.length >= 2) break;
       await new Promise(r => setTimeout(r, 3000));
     }
 
@@ -2279,12 +2317,10 @@
       + '</div>'
       + '<h1 class="w-title" id="liveTitleEl"></h1>'
       + '<div class="w-row"><div class="wl-name" id="liveBroadEl"></div><span class="live-viewers" id="liveViewers"></span></div>'
-      + '<p class="muted-txt" id="liveStatus">Streaming…</p>'
-      + '</div>';
+      + '<p class="muted-txt" id="liveStatus">Streaming…</p>';
 
     const v = $('#liveVideo');
     const statusEl = $('#liveStatus');
-
 
     /* live chat (comments of the stream video) */
     let chatSeen = 0;
@@ -2292,10 +2328,10 @@
       const cl = $('#chatList');
       if (!cl) return;
       const fresh = list.slice().reverse().filter(c => c.id > chatSeen);
-      fresh.forEach(c => cl.insertAdjacentHTML('beforeend', chatItemHTML(c)));
+      fresh.forEach(c => cl.insertAdjacentHTML('beforeend', chatMsgHTML(c)));
       if (fresh.length) { cl.scrollTop = cl.scrollHeight; chatSeen = Math.max(chatSeen, ...list.map(c => c.id)); }
     }
-    function chatItemHTML(c) {
+    function chatMsgHTML(c) {
       const pal = palFor(c.author);
       return '<div class="chat-msg">' + avatarHTML({ name: c.author, colors: pal }, 26)
         + '<div class="chat-mbody"><span class="chat-mauthor">' + nameHTML(c.author) + '</span>'
@@ -2345,7 +2381,6 @@
     }
     nextSeg();
   }
-
 
   /* ═══════════ router ═══════════ */
   const routes = [
