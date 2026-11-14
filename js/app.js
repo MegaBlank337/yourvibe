@@ -64,6 +64,7 @@
     if (b.me && S.auth && S.auth.token) {
       if (b.me.avatar_url) { S.acctAvatar = b.me.avatar_url; AVATARS[S.auth.username.toLowerCase()] = b.me.avatar_url; }
       if (b.me.banner_url) S.acctBanner = b.me.banner_url;
+      if (b.me.bio) S.myChannel.bio = b.me.bio;
       renderMe();
     }
     saveFeedCache();
@@ -443,7 +444,7 @@
       + '<div class="banner"' + ((S.acctBanner || c.banner) ? ' style="background-image:url(' + (S.acctBanner || c.banner) + ')"' : ' style="--c1:' + c.colors[0] + ';--c2:' + c.colors[1] + '"') + '></div>'
       + '<div class="ch-head">'
       + '<span class="ch-ava">' + avatarHTML(meCh(), 96) + '</span>'
-      + '<div class="ch-id"><h1 class="ch-name-big">' + esc(c.name) + '</h1>'
+      + '<div class="ch-id"><h1 class="ch-name-big">' + esc(myName()) + '</h1>'
       + '<div class="ch-sub">' + fmtNum(subsOfCreator(myName())) + ' subscribers · ' + fmtNum(totalViews) + ' views · ' + mine.length + ' upload' + (mine.length === 1 ? '' : 's') + '</div></div>'
       + '<div class="ch-actions"><a class="btn-neon" href="#/upload">＋ Upload</a>'
       + '<a class="pill-btn ghost" href="#/settings">⚙ Customize channel</a></div>'
@@ -459,7 +460,7 @@
         + mine.map(v => '<div class="manage-row"><span class="mr-ico">' + (v.type === 'short' ? '⚡' : '🎬') + '</span>'
           + '<span class="mr-t">' + esc(v.title) + '</span>'
           + '<span class="mr-s">' + fmtNum(viewsOf(v)) + ' views · ' + fmtNum(likesOf(v)) + ' likes · ' + agoOf(v) + '</span>'
-          + (S.myDelKeys[v.id] ? '<button class="pill-btn danger" data-action="del" data-id="' + v.id + '">Delete</button>' : '')
+          + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="pill-btn danger" data-action="del" data-id="' + v.id + '">Delete</button>' : '')
           + '</div>').join('') + '</div>' : '')
       + '</div>'
       + '<div class="tab-panel hide" data-panel="about">'
@@ -1162,7 +1163,7 @@
       $('#avaMsg').textContent = avaData ? '✅ ready' : '⚠️ could not read image (try a JPG/PNG)';
       if (avaData) {
         $('#prevAva').innerHTML = '<span class="av av-img" style="width:72px;height:72px"><img src="' + avaData + '"></span>';
-        if (S.auth && S.auth.token) saveProfileToAccount({ avatar: avaData, banner: banData }); // instant account save
+        if (S.auth && S.auth.token) saveProfileToAccount({ avatar: avaData, banner: banData, bio: $('#stBio').value.trim() }); // instant account save
       }
     };
     $('#banIn').onchange = async e => {
@@ -1194,7 +1195,7 @@
         api('/api/auth/profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ avatar: avaData, banner: banData })
+          body: JSON.stringify({ avatar: avaData, banner: banData, bio: $('#stBio').value.trim() })
         }).then(() => { AVATARS[S.auth.username.toLowerCase()] = avaData; navigate(); }).catch(() => {});
       }
       toast('Channel updated', '✨');
@@ -1340,6 +1341,7 @@
       const me = await api('/api/auth/me');
       if (me.avatar_url) { S.acctAvatar = me.avatar_url; AVATARS[S.auth.username.toLowerCase()] = me.avatar_url; }
       if (me.banner_url) S.acctBanner = me.banner_url;
+      if (me.bio) S.myChannel.bio = me.bio;
       renderMe();
     } catch (e) {}
   }
@@ -1355,6 +1357,8 @@
       });
       if (r.avatar_url) { S.acctAvatar = r.avatar_url; AVATARS[S.auth.username.toLowerCase()] = r.avatar_url; }
       if (r.banner_url) { S.acctBanner = r.banner_url; }
+      if (r.bio !== undefined) S.myChannel.bio = r.bio || S.myChannel.bio;
+      YV.store.save();
       renderMe();
     } catch (e) {}
   }
