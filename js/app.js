@@ -1847,7 +1847,7 @@
     loadVideos().then(() => {
       if (feedSig() !== sig) {
         const p = location.hash.slice(1) || '/';
-        if (/^\/?$|\/home|\/subscriptions|\/library|\/shorts|\/watch/.test(p)) navigate();
+        if (/^\/?$|\/home|\/subscriptions|\/library|\/shorts/.test(p)) navigate();
       }
     }).catch(() => {});
   }
