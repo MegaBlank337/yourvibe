@@ -618,6 +618,8 @@
                 hls.loadSource(s.hls);
                 hls.attachMedia(nv);
                 cleanups.push(() => hls.destroy());
+                initPlayer();          // attaches play button, controls, spinner —
+                                       // play/pause events hide the big button
                 nv.play().catch(() => {});
                 return;
               }
