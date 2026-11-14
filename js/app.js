@@ -43,6 +43,8 @@
     return r.json();
   }
 
+  let VERIFIED = new Set();   // creator names with the verified badge
+  let NOTIFS = [];            // admin notifications (latest 10)
   let VIDEOS = [];
   let CREATORS = {};   // { uploaderName: subscriberCount }
   let videosLoaded = false;
@@ -61,6 +63,8 @@
     VIDEOS = b.videos || [];
     CREATORS = b.creators || {};
     AVATARS = Object.assign({}, b.avatars || {});
+    VERIFIED = new Set(b.verified || []);
+    NOTIFS = b.notifications || [];
     videosLoaded = true;
     if (b.announcement !== undefined) { ANN = b.announcement; renderAnnouncement(); }
     if (b.me && S.auth && S.auth.token) {
@@ -231,6 +235,12 @@
   }
 
   /* ═══════════ avatar & buttons ═══════════ */
+  /* verified badge next to a creator name */
+  function nameHTML(name, cls) {
+    const badge = VERIFIED.has(name) ? ' <span class="vrf-badge" title="Verified">✓</span>' : '';
+    return '<span' + (cls ? ' class="' + cls + '"' : '') + '>' + esc(name) + badge + '</span>';
+  }
+
   function avatarHTML(c, size) {
     size = size || 36;
     let ch = c;
@@ -281,7 +291,7 @@
       + '<div class="meta">' + avatarHTML(up, 36)
       + '<div class="meta-txt">'
       + '<h3>' + esc(v.title) + '</h3>'
-      + '<div class="ch-name">' + esc(v.uploader) + '</div>'
+      + '<div class="ch-name">' + nameHTML(v.uploader) + '</div>'
       + '<div class="v-stats">' + fmtNum(viewsOf(v)) + ' views · ' + agoOf(v) + '</div>'
       + '</div></div></a>';
   }
@@ -515,7 +525,7 @@
   function cItemHTML(c) {
     const pal = palFor(c.author);
     return '<div class="c-item">' + avatarHTML({ name: c.author, colors: pal }, 34)
-      + '<div class="c-body"><div class="c-user">@' + esc(c.author) + ' <span>' + timeAgo(c.created_at ? Date.parse(c.created_at) : Date.now()) + '</span></div>'
+      + '<div class="c-body"><div class="c-user">@' + nameHTML(c.author) + ' <span>' + timeAgo(c.created_at ? Date.parse(c.created_at) : Date.now()) + '</span></div>'
       + '<p>' + esc(c.text) + '</p></div></div>';
   }
 
@@ -586,7 +596,7 @@
       + '<h1 class="w-title">' + esc(v.title) + '</h1>'
       + '<div class="w-row">'
       + '<a class="ch-link" href="#/c/' + encodeURIComponent(v.uploader) + '">' + avatarHTML(up, 42)
-      + '<div><div class="wl-name">' + esc(v.uploader) + '</div>'
+      + '<div><div class="wl-name">' + nameHTML(v.uploader) + '</div>'
       + '<div class="wl-subs">' + fmtNum(subsOfCreator(v.uploader)) + ' subscribers</div></div></a>'
       + subBtnHTML(v.uploader)
       + '<span class="w-spacer"></span>'
@@ -1302,6 +1312,44 @@
     }
   }
 
+  /* ═══════════ notifications (bell) ═══════════ */
+  function renderNotifs() {
+    const btn = $('#notifBtn');
+    if (!btn) return;
+    let seen = 0;
+    try { seen = Number(localStorage.getItem('yv_notif_seen') || 0); } catch (e) {}
+    const unread = NOTIFS.filter(n => n.id > seen).length;
+    const cnt = $('#notifCount');
+    if (cnt) { cnt.textContent = unread || ''; cnt.style.display = unread ? 'grid' : 'none'; }
+  }
+
+  function openNotifPanel() {
+    const panel = $('#notifPanel');
+    if (!panel) return;
+    panel.classList.toggle('hide');
+    if (panel.classList.contains('hide')) return;
+    const list = $('#notifList');
+    if (!NOTIFS.length) {
+      list.innerHTML = '<p class="muted-txt" style="padding:16px;text-align:center">No notifications yet 🔔</p>';
+    } else {
+      list.innerHTML = NOTIFS.map(n =>
+        '<div class="notif-item"><div class="notif-sender">▶ YourVibe <span class="vrf-badge" title="Verified">✓</span></div>'
+        + '<div class="notif-text">' + esc(n.text) + '</div>'
+        + '<div class="notif-time">' + timeAgo(n.created_at ? Date.parse(n.created_at) : 0) + '</div></div>'
+      ).join('');
+    }
+    const top = NOTIFS.length ? NOTIFS[0].id : 0;
+    try { localStorage.setItem('yv_notif_seen', String(top)); } catch (e) {}
+    renderNotifs();
+  }
+
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('#notifBtn');
+    const panel = document.querySelector('#notifPanel');
+    if (btn) { openNotifPanel(); return; }
+    if (panel && !panel.classList.contains('hide') && !e.target.closest('#notifPanel')) panel.classList.add('hide');
+  });
+
   /* ═══════════ announcements (admin → everyone) ═══════════ */
   let ANN = null;
 
@@ -1594,6 +1642,9 @@
       + '<div class="admin-row"><input type="text" id="adminTransferTo" maxlength="50" placeholder="account / creator name"><button class="pill-btn" data-admin="transfer">📦 Transfer video to name</button></div>'
       + '<div class="admin-row"><input type="text" id="adminAnnText" maxlength="300" placeholder="📣 Announcement text (everyone sees it)"><button class="pill-btn" data-admin="announce">📣 Post</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">announcement shows as a banner on the site</span><button class="pill-btn danger" data-admin="announce-clear">🗑 Remove announcement</button></div>'
+      + '<div class="admin-row"><input type="text" id="adminVerifyName" maxlength="50" placeholder="✔ creator name to verify"><button class="pill-btn" data-admin="verify">✔ Verify</button><button class="pill-btn danger" data-admin="unverify">✕ Unverify</button></div>'
+      + '<div class="admin-row"><input type="text" id="adminNotifText" maxlength="300" placeholder="🔔 Notification text (from YourVibe ✓)"><button class="pill-btn" data-admin="notify">🔔 Send</button></div>'
+      + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">clears every notification</span><button class="pill-btn danger" data-admin="notif-clear">🗑 Clear notifications</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">create a poll for the selected video</span><button class="pill-btn" data-admin="poll">📊 Create poll</button></div>'
       + '</div>'
       + '<p class="muted-txt">Applies on the server — everyone sees it. Comments come from randomly generated accounts.</p>'
@@ -1639,6 +1690,43 @@
   }
 
   async function adminAction(kind) {
+    if (kind === 'verify' || kind === 'unverify') {
+      const name = ($('#adminVerifyName') && $('#adminVerifyName').value || '').trim();
+      if (!name) { toast('Enter the creator name', '⚠️'); return; }
+      try {
+        await api('/api/admin/creator/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
+          body: JSON.stringify({ name, verified: kind === 'verify' })
+        });
+        await loadVideos();
+        toast(name + (kind === 'verify' ? ' is now verified ✔' : ' unverified'), '✔');
+      } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
+    if (kind === 'notify') {
+      const text = ($('#adminNotifText') && $('#adminNotifText').value || '').trim();
+      if (!text) { toast('Enter notification text', '⚠️'); return; }
+      try {
+        await api('/api/admin/notification', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
+          body: JSON.stringify({ text })
+        });
+        await loadVideos();
+        toast('Notification sent 🔔', '✅');
+        $('#adminNotifText').value = '';
+      } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
+    if (kind === 'notif-clear') {
+      try {
+        await api('/api/admin/notification', { method: 'DELETE', headers: { 'X-Admin-Key': ADMIN_KEY } });
+        await loadVideos();
+        toast('Notifications cleared', '🗑');
+      } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
     if (kind === 'announce') {
       const text = ($('#adminAnnText') && $('#adminAnnText').value || '').trim();
       if (!text) { toast('Enter announcement text', '⚠️'); return; }
