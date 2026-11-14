@@ -2174,6 +2174,7 @@
         return;
       }
       liveStreamId = id; liveChunksSent = 0;
+      UPLOADING = true;   // broadcast in progress — block auto-updates
       const off = $('#liveOff'); if (off) off.remove();
 
       /* End stream: stop recording, flush the last segment, then end on the server */
@@ -2188,7 +2189,7 @@
         stream.getTracks().forEach(tr => tr.stop());
         try { await api('/api/live/' + id + '/end', { method: 'POST' }); } catch (e) {}
         toast('Stream ended', '🔴');
-        liveRecorder = null; liveStreamId = null;
+        liveRecorder = null; liveStreamId = null; UPLOADING = false;
         if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
         location.hash = '#/live/' + id;
       };
@@ -2387,7 +2388,7 @@
   /* auto-update: reload the tab when a newer version is deployed
      — but NEVER while an upload is running */
   async function checkVersion() {
-    if (UPLOADING) return;
+    if (UPLOADING || liveStreamId) return;   // never reload while publishing OR broadcasting
     try {
       const r = await fetch('/', { cache: 'no-store' });
       const t = await r.text();
