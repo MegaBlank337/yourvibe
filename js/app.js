@@ -43,6 +43,7 @@
     return r.json();
   }
 
+  let LIVE_NOW = [];          // currently live streams
   let VERIFIED = new Set();   // creator names with the verified badge
   let COLORS = {};            // creator name -> channel rank color (bronze..ruby)
   let NOTIFS = [];            // admin notifications (latest 10)
@@ -363,8 +364,21 @@
     '<div class="empty"><div class="empty-ico">' + ico + '</div><h3>' + t + '</h3><p>' + s + '</p>' + (btn || '') + '</div>';
 
   /* ═══════════ VIEW: HOME ═══════════ */
+  function liveShelfHTML() {
+    if (!LIVE_NOW.length) return '';
+    return shelf('🔴 Live now', LIVE_NOW.map(s =>
+      '<a class="card live-card" href="#/live/' + s.id + '">'
+      + '<div class="thumb" style="--c1:#ff2bd6;--c2:#8b5cf6"><div class="live-badge"><span class="live-dot"></span>LIVE</div><span class="thumb-ghost">▶</span></div>'
+      + '<div class="meta"><div class="meta-txt"><h3>' + esc(s.title) + '</h3>'
+      + '<div class="ch-name">' + esc(s.broadcaster) + '</div>'
+      + '<div class="v-stats" style="color:#ff5a78;font-weight:700">🔴 LIVE</div>'
+      + '</div></div></a>'
+    ).join(''));
+  }
+
   async function viewHome(q) {
     if (!await ensureVideos()) return;
+    try { LIVE_NOW = await api('/api/live'); } catch (e) { LIVE_NOW = []; }
     const cat = q.get('cat') || 'All';
     const videos = VIDEOS.filter(v => v.type !== 'short');
     const shorts = VIDEOS.filter(v => v.type === 'short');
@@ -377,6 +391,7 @@
         '<a class="chip' + (c === cat ? ' on' : '') + '" href="#/home?cat=' + encodeURIComponent(c) + '">' + c + '</a>').join('') + '</div>'
 
       + (trending.length ? shelf('🔥 Trending Now', trending.map(cardHTML).join('')) : '')
+      + (typeof liveShelfHTML === 'function' ? liveShelfHTML() : '')
 
       + (shortList.length ? shelf('⚡ Shorts', shortList.slice(0, 10).map(shortCardHTML).join('')) : '')
 
@@ -1980,6 +1995,151 @@
     }
   });
 
+  /* ═══════════ LIVE STREAMING ═══════════ */
+  let liveRecorder = null;
+  let liveStreamId = null;
+  let liveChunksSent = 0;
+  let liveTimer = null;
+
+  function pickMime() {
+    const cands = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm'];
+    for (const m of cands) { if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m; }
+    return '';
+  }
+
+  /* GO LIVE page: choose screen or camera */
+  function viewGoLive() {
+    if (!S.auth || !S.auth.token) {
+      main.innerHTML = '<div class="page"><div class="auth-card"><h1 class="page-title">Go Live</h1>'
+        + '<p class="muted-txt">Log in to start a live stream.</p>'
+        + '<a class="btn-neon" href="#/login" style="justify-content:center">Log in</a></div></div>';
+      return;
+    }
+    const mime = pickMime();
+    if (!mime) {
+      main.innerHTML = '<div class="page"><div class="empty"><div class="empty-ico">🔴</div><h3>Not supported</h3><p>Your browser can\'t record live video.</p></div></div>';
+      return;
+    }
+    main.innerHTML = '<div class="page live-page">'
+      + '<h1 class="page-title">Go Live 🔴</h1>'
+      + '<p class="muted-txt">Broadcast your screen or camera — viewers watch with a ~10 second delay.</p>'
+      + '<div class="up-grid">'
+      + '<div class="live-preview"><video id="livePrev" muted playsinline autoplay></video><div class="live-off" id="liveOff">Preview off</div></div>'
+      + '<form class="up-form" id="liveForm">'
+      + '<div class="field"><label>Stream title</label><input id="liveTitle" maxlength="80" placeholder="' + esc(myName()) + ' is live!"></div>'
+      + '<div class="field"><label>Source</label><div class="radio-row">'
+      + '<label class="rd"><input type="radio" name="liveSrc" value="screen" checked> 🖥️ Screen</label>'
+      + '<label class="rd"><input type="radio" name="liveSrc" value="camera"> 📷 Camera</label>'
+      + '</div></div>'
+      + '<div class="form-err" id="liveErr"></div>'
+      + '<button class="btn-neon live-btn" id="liveStart" type="button">🔴 Go Live</button>'
+      + '</form></div></div>';
+
+    $('#liveStart').onclick = async () => {
+      const src = document.querySelector('input[name="liveSrc"]:checked').value;
+      $('#liveErr').textContent = '';
+      let stream;
+      try {
+        stream = src === 'screen' ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+          : await navigator.mediaDevices.getUserMedia({ video: { width: 1280 }, audio: true });
+      } catch (e) {
+        $('#liveErr').textContent = '⚠️ ' + (e.name === 'NotAllowedError' ? 'permission denied' : e.message);
+        return;
+      }
+      const title = ($('#liveTitle').value || '').trim() || (myName() + ' is live');
+      let id;
+      try {
+        const r = await api('/api/live/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
+        id = r.id;
+      } catch (e) { $('#liveErr').textContent = '⚠️ ' + (e.message || 'server error'); stream.getTracks().forEach(tr => tr.stop()); return; }
+      liveStreamId = id; liveChunksSent = 0;
+
+      const pv = $('#livePrev'); pv.srcObject = stream;
+      const off = $('#liveOff'); if (off) off.remove();
+
+      const btn = $('#liveStart');
+      btn.textContent = '⏹ End stream';
+      btn.onclick = async () => {
+        try { liveRecorder && liveRecorder.state !== 'inactive' && liveRecorder.stop(); } catch (e) {}
+        stream.getTracks().forEach(tr => tr.stop());
+        try { await api('/api/live/' + id + '/end', { method: 'POST' }); } catch (e) {}
+        toast('Stream ended', '🔴');
+        liveRecorder = null; liveStreamId = null;
+        if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+        location.hash = '#/live/' + id;
+      };
+
+      let secs = 0;
+      liveTimer = setInterval(() => { secs++; btn.textContent = '⏹ End stream — ' + Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0') + ' · ' + liveChunksSent + ' segs'; }, 1000);
+
+      liveRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000 });
+      liveRecorder.ondataavailable = async e => {
+        if (!e.data || !e.data.size || !liveStreamId) return;
+        try {
+          const r = await api('/api/live/' + id + '/seg', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: e.data });
+          liveChunksSent = (r && r.total) || (liveChunksSent + 1);
+        } catch (e2) { /* retry on next chunk */ }
+      };
+      liveRecorder.start(3000);
+    };
+  }
+
+  /* VIEWER: sequential segment player (starts at the live edge) */
+  async function viewLiveStream(id) {
+    main.innerHTML = '<div class="page live-view-page"><div class="loading-box"><div class="spinner"></div><p>Connecting to the stream…</p></div></div>';
+    let segIdx = -1;
+    let ended = false;
+    let gone = false;
+
+    for (let i = 0; i < 120; i++) {
+      let pl;
+      try { pl = await api('/api/live/' + id + '/playlist'); } catch (e) { pl = { status: 'gone' }; }
+      if (pl.status === 'gone') {
+        main.innerHTML = '<div class="page"><div class="empty"><div class="empty-ico">📡</div><h3>Stream offline</h3><p>This live stream has ended or never existed.</p><a class="btn-neon" href="#/home">Back home</a></div></div>';
+        return;
+      }
+      if (pl.segs && pl.segs.length >= 2) break; // enough to join at the live edge
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    main.innerHTML = '<div class="page live-view-page">'
+      + '<div class="player" id="livePlayer">'
+      + '<video id="liveVideo" autoplay playsinline></video>'
+      + '<div class="live-badge"><span class="live-dot"></span>LIVE</div>'
+      + '</div>'
+      + '<h1 class="w-title" id="liveTitleEl"></h1>'
+      + '<div class="w-row"><div class="wl-name" id="liveBroadEl"></div></div>'
+      + '<p class="muted-txt" id="liveStatus">Streaming…</p>'
+      + '</div>';
+
+    const v = $('#liveVideo');
+    const statusEl = $('#liveStatus');
+
+    async function nextSeg() {
+      if (ended) { statusEl.textContent = 'Stream ended 🔴'; return; }
+      let pl;
+      try { pl = await api('/api/live/' + id + '/playlist'); } catch (e) { setTimeout(nextSeg, 3000); return; }
+      if (pl.status === 'gone') { statusEl.textContent = 'Stream ended'; return; }
+      ended = pl.status === 'ended';
+      const segs = pl.segs || [];
+      $('#liveTitleEl').textContent = pl.title || '';
+      $('#liveBroadEl').textContent = 'by ' + pl.broadcaster;
+      if (segIdx < 0) segIdx = Math.max(0, segs.length - 2); // join at the live edge
+      if (segIdx < segs.length) {
+        const url = segs[segIdx];
+        v.src = url;
+        v.play().catch(() => {});
+        statusEl.textContent = ended ? 'Final moments…' : '🔴 Live — you are watching in real time';
+        v.onended = () => { segIdx++; nextSeg(); };
+      } else {
+        statusEl.textContent = ended ? 'Stream ended 🔴' : 'Reconnecting…';
+        setTimeout(nextSeg, ended ? 4000 : 3000);
+      }
+    }
+    nextSeg();
+  }
+
+
   /* ═══════════ router ═══════════ */
   const routes = [
     [/^\/?$/,                 q => viewHome(q)],
@@ -1990,6 +2150,8 @@
     [/^\/upload$/,            () => viewUpload()],
     [/^\/settings$/,          () => viewSettings()],
     [/^\/login$/,             () => viewLogin()],
+    [/^\/live$/,              () => viewGoLive()],
+    [/^\/live\/([\w-]+)$/,   m => viewLiveStream(m[1])],
     [/^\/channel$/,           () => viewMyChannel()],
     [/^\/c\/(.+)$/,           m => viewChannel(m[1])],
     [/^\/watch\/([\w-]+)$/,   m => viewWatch(m[1])],
@@ -1998,6 +2160,7 @@
 
   function navName(path) {
     if (/^\/?$|\/home|\/watch|\/results/.test(path)) return 'home';
+    if (path.startsWith('/live')) return 'live';
     if (path.startsWith('/shorts')) return 'shorts';
     if (path.startsWith('/subscriptions')) return 'subs';
     if (path.startsWith('/library')) return 'library';
