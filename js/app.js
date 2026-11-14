@@ -212,7 +212,12 @@
      Publisher's own fresh bunny video → play the LOCAL file instantly (no encoding wait) */
   const srcOf = v => {
     if (LOCAL_PLAYBACK[v.id]) return LOCAL_PLAYBACK[v.id];
-    return (Number(v.parts) > 1) ? (API_BASE + '/stream/' + v.id) : v.video_url;
+    if (Number(v.parts) > 1) return API_BASE + '/stream/' + v.id;
+    /* bunny 1080p files are huge — direct playback uses 720p (HLS gives full quality) */
+    if (v.store === 'bunny' && /play_1080p/.test(v.video_url || '')) {
+      return v.video_url.replace('play_1080p', 'play_720p');
+    }
+    return v.video_url;
   };
 
   function bumpView(v) {
@@ -632,7 +637,7 @@
                 return;
               }
               if (nv) { /* Safari / no hls.js: MP4 fallback + native HLS */
-                nv.src = (window.Hls && !Hls.isSupported() && nv.canPlayType('application/vnd.apple.mpegurl')) ? s.hls : s.play;
+                nv.src = (window.Hls && !Hls.isSupported() && nv.canPlayType('application/vnd.apple.mpegurl')) ? s.hls : s.play.replace('play_1080p', 'play_720p');
                 initPlayer();
                 nv.play().catch(() => {});
                 return;
