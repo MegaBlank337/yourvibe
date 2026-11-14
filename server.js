@@ -569,6 +569,11 @@ app.get('/api/boot', async (req, res) => {
         av.rows.forEach(r => { avatars[r.username] = r.avatar_url; });
       }
     } catch (e) {}
+    const colors = {};
+    try {
+      const cl = await q('select name, color from creators where color is not null');
+      cl.rows.forEach(r => { colors[r.name] = r.color; });
+    } catch (e) {}
     let announcement = null;
     try {
       const ann = await q('select id, text, created_at from announcements order by id desc limit 1');
@@ -580,6 +585,8 @@ app.get('/api/boot', async (req, res) => {
       try {
         const r = await q('select username, avatar_url, banner_url, bio from users where username = $1', [u]);
         me = r.rows[0] || { username: u };
+        const crc = await q('select color from creators where name = $1', [u]);
+        if (crc.rows.length && crc.rows[0].color) me.channel_color = crc.rows[0].color;
       } catch (e) { me = { username: u }; }
     }
     let notifications = [];
