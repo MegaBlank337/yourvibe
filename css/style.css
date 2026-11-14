@@ -488,7 +488,14 @@ main > * { animation: fadeUp .38s ease both; }
 .ctl-row { display: flex; align-items: center; gap: 10px; }
 
 .seek { height: 6px; border-radius: 99px; background: rgba(255, 255, 255, .16); cursor: pointer; position: relative; }
+.seek-buffer {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 0;
+  background: rgba(255, 255, 255, .28);
+  border-radius: 99px;
+}
 .seek-fill {
+  position: absolute; left: 0; top: 0;
   height: 100%; width: 0%;
   background: linear-gradient(90deg, var(--pink), var(--purple), var(--cyan));
   border-radius: 99px; position: relative;
