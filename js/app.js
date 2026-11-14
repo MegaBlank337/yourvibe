@@ -619,30 +619,31 @@
               s.hls = new URL(s.play).origin + '/' + v.id + '/playlist.m3u8';
             }
             if (s.hls) {
-              const P = $('#yvPlayer');
-              if (!P || !P.dataset.bunny) return; // user navigated away
-              const fresh = byId(v.id) || v;
-              fresh.video_url = s.play;
-              if (s.thumb) fresh.thumb_url = s.thumb;
-              P.innerHTML = playerHTML(fresh).replace('id="yvPlayer"', 'id="yvPlayer" data-bunny-done');
-              const nv = $('#yvVideo');
-              if (nv && window.Hls && Hls.isSupported()) {
-                const hls = new Hls({ maxBufferLength: 30, startLevel: 0 });
-                hls.loadSource(s.hls);
-                hls.attachMedia(nv);
-                cleanups.push(() => hls.destroy());
-                initPlayer();          // attaches play button, controls, spinner —
-                                       // play/pause events hide the big button
-                nv.play().catch(() => {});
-                return;
-              }
-              if (nv) { /* Safari / no hls.js: MP4 fallback + native HLS */
-                nv.src = (window.Hls && !Hls.isSupported() && nv.canPlayType('application/vnd.apple.mpegurl')) ? s.hls : s.play.replace('play_1080p', 'play_720p');
-                initPlayer();
-                nv.play().catch(() => {});
-                return;
-              }
-              return;
+          const P = $('#yvPlayer');
+          if (!P) return; // navigated away
+          /* placeholder: swap in the real player; already-rendered: keep it */
+          if (P.dataset.bunny) {
+            const fresh = byId(v.id) || v;
+            fresh.video_url = s.play;
+            if (s.thumb) fresh.thumb_url = s.thumb;
+            P.innerHTML = playerHTML(fresh).replace('id="yvPlayer"', 'id="yvPlayer" data-bunny-done');
+          }
+          const nv = $('#yvVideo');
+          if (!nv) return;
+          /* ALWAYS attach controls - this is what makes the play button work */
+          if (window.Hls && Hls.isSupported()) {
+            const hls = new Hls({ maxBufferLength: 30, startLevel: 0 });
+            hls.loadSource(s.hls);
+            hls.attachMedia(nv);
+            cleanups.push(() => hls.destroy());
+          } else if (nv.canPlayType('application/vnd.apple.mpegurl')) {
+            nv.src = s.hls; // Safari native HLS
+          } else {
+            nv.src = s.play.replace('play_1080p', 'play_720p');
+          }
+          initPlayer();
+          nv.play().catch(() => {});
+          return;
             }
           } catch (e) {}
           await new Promise(r => setTimeout(r, 5000));
