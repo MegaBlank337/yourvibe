@@ -2106,7 +2106,6 @@
     UPLOADING = true; // block auto-update reloads while broadcasting
 
     buildLiveBar(title);
-    const bar = document.getElementById('liveBar');
     const btn = $('#lbEnd');
     btn.onclick = () => endBroadcast();
 
@@ -2122,7 +2121,7 @@
       } catch (e) {}
     }, 1000);
 
-    /* recorder: 3s segments → direct to CDN via the API */
+    /* recorder: 3s segments → CDN via the API (retries, timeouts) */
     liveRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000 });
     liveRecorder.ondataavailable = async e => {
       if (!e.data || !e.data.size || !liveStreamId) return;
@@ -2144,16 +2143,20 @@
       const sg = document.getElementById('lbSegs');
       if (sg) sg.textContent = liveChunksSent + ' segs';
     };
+    /* capture surface dies → end cleanly */
+    const vTrack = stream.getVideoTracks()[0];
+    if (vTrack) vTrack.addEventListener('ended', () => { if (liveStreamId) endBroadcast(); });
     liveRecorder.start(3000);
   }
 
   async function endBroadcast() {
-    if (liveEnding) return;
+    if (liveEnding || !liveStreamId) return;
     liveEnding = true;
     const sid = liveStreamId;
+    const btn = document.getElementById('lbEnd');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Ending…'; }
     try { if (liveRecorder && liveRecorder.state !== 'inactive') { liveRecorder.stop(); await new Promise(r => setTimeout(r, 1500)); } } catch (e) {}
     if (liveRawStream) { try { liveRawStream.getTracks().forEach(tr => tr.stop()); } catch (e) {} }
-    /* hard timeout — the end call can't hang the UI */
     try {
       const ctrl = new AbortController();
       const killer = setTimeout(() => ctrl.abort(), 8000);
@@ -2161,8 +2164,6 @@
       clearTimeout(killer);
     } catch (e) { /* server auto-ends after 45s without segments */ }
     toast('Stream ended', '🔴');
-    try { if (livePeer) { livePeer.destroy(); } } catch (e) {}
-    livePeer = null; liveCalls.clear();
     liveRecorder = null; liveStreamId = null; liveRawStream = null; UPLOADING = false;
     if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
     removeLiveBar();
@@ -2188,7 +2189,8 @@
     }
     main.innerHTML = '<div class="page live-page">'
       + '<h1 class="page-title">Go Live 🔴</h1>'
-      + '<p class="muted-txt">Broadcast your screen or camera — viewers watch with a ~10 second delay. You can browse the site while live: the red control bar stays with you.</p>'
+      + '<p class="muted-txt">Broadcast your screen or camera — viewers watch with a ~10 second delay. The red control bar follows you on every page.</p>'
+      + '<p class="muted-txt" style="color:#f2d98c">💡 Tip: in the share dialog choose <b>Entire Screen</b> — then Roblox and every app get captured too.</p>'
       + '<div class="up-grid">'
       + '<div class="live-preview"><video id="livePrev" muted playsinline autoplay></video><div class="live-off" id="liveOff">Preview off</div></div>'
       + '<form class="up-form" id="liveForm">'
@@ -2266,39 +2268,33 @@
       /* thumbnail: chosen one wins, otherwise capture a frame from the preview */
       let thumb = liveThumb;
       if (!thumb) {
-        pv2 = $('#livePrev'); // preview already connected
-        await new Promise(r => setTimeout(r, 800));
+        const pv2 = $('#livePrev');
+        await new Promise(r => setTimeout(r, 1200));
         try {
           const cv = document.createElement('canvas');
           cv.width = 640; cv.height = 360;
-          cv.getContext('2d').drawImage(pv2 || $('#livePrev'), 0, 0, 640, 360);
+          cv.getContext('2d').drawImage(pv2, 0, 0, 640, 360);
           thumb = cv.toDataURL('image/jpeg', 0.8);
         } catch (e) {}
       }
-
       const pvOff = $('#liveOff'); if (pvOff) pvOff.remove();
 
       try {
         await startBroadcast(stream, title, thumb, mime);
-        /* P2P host: viewers connect directly to this browser */
-        if (window.Peer) {
-          livePeer = new Peer('yourvibe-live-' + liveStreamId, { host: location.hostname, port: location.protocol === 'https:' ? 443 : 80, path: '/peerjs', secure: location.protocol === 'https:' });
-          livePeer.on('call', call => { try { call.answer(stream); liveCalls.add(call); call.on('close', () => liveCalls.delete(call)); } catch (e) {} });
-          livePeer.on('error', err => { if (err.type !== 'peer-unavailable') console.warn('peer error:', err.type); });
-        }
       } catch (e) {
         $('#liveErr').textContent = '⚠️ ' + (e.message || 'server error');
         stream.getTracks().forEach(tr => tr.stop());
         btn.disabled = false; btn.textContent = '🔴 Go Live';
         return;
       }
-      /* broadcasting — jump to the stream page; the red bar stays with you */
-      location.hash = '#/live/' + liveStreamId;
+      /* broadcasting — back to home; the red control bar follows you everywhere */
+      location.hash = '#/home';
     };
   }
 
   /* VIEWER: sequential segment player (starts at the live edge) + chat */
   async function viewLiveStream(id) {
+    const ICE_VIEWER = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
     main.innerHTML = '<div class="page live-view-page"><div class="loading-box"><div class="spinner"></div><p>Connecting to the stream…</p></div></div>';
     let segIdx = -1;
     let ended = false;
@@ -2316,9 +2312,8 @@
 
     main.innerHTML = '<div class="live-layout" id="liveWrap">'
       + '<div class="player" id="livePlayer">'
-      + '<video id="liveVideo" playsinline></video>'
+      + '<video id="liveVideo" autoplay playsinline></video>'
       + '<div class="live-badge"><span class="live-dot"></span>LIVE</div>'
-      + '<button class="big-play" id="livePlayBig" aria-label="Play">▶</button>'
       + '</div>'
       + '<div class="chat-panel" id="liveChat">'
       + '<div class="chat-head">💬 Live chat <span class="vrf-badge" title="Verified">✓</span></div>'
@@ -2367,54 +2362,32 @@
       } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
     };
 
-    /* P2P receive: connects straight to the broadcaster (sub-second) */
-    async function startP2PView() {
-      if (!window.Peer) { statusEl.textContent = 'Live requires a modern browser'; return; }
-      const peer = new Peer({ host: location.hostname, port: location.protocol === 'https:' ? 443 : 80, path: '/peerjs', secure: location.protocol === 'https:' });
-      peer.on('open', () => {
-        const call = peer.call('yourvibe-live-' + id, null); // receive-only
-        call.on('stream', remote => {
-          v.srcObject = remote;
-          statusEl.textContent = '🔴 Live — press ▶ to start watching';
-          /* browsers block autoplay with sound — start on the play button click */
-          const pb = document.querySelector('#livePlayBig');
-          if (pb) {
-            pb.onclick = () => { v.play().catch(() => {}); };
-          }
-          v.onplaying = () => { const b2 = document.querySelector('#livePlayBig'); if (b2) b2.remove(); };
-        });
-        call.on('close', () => { statusEl.textContent = '🔴 Stream ended'; });
-        call.on('error', () => { statusEl.textContent = '🔴 Connection error — retrying…'; setTimeout(startP2PView, 3000); });
-      });
-      peer.on('error', err => {
-        if (err.type === 'peer-unavailable') {
-          /* broadcaster may still be starting — retry */
-          setTimeout(startP2PView, 3000);
-        }
-      });
+    async function nextSeg() {
+      if (ended) { statusEl.textContent = 'Stream ended 🔴'; return; }
+      let pl;
+      try { pl = await api('/api/live/' + id + '/playlist'); } catch (e) { setTimeout(nextSeg, 3000); return; }
+      if (pl.status === 'gone') { statusEl.textContent = 'Stream ended'; return; }
+      ended = pl.status === 'ended';
+      const segs = pl.segs || [];
+      $('#liveTitleEl').textContent = pl.title || '';
+      $('#liveBroadEl').innerHTML = 'by ' + nameHTML(pl.broadcaster);
+      const vw = $('#liveViewers');
+      if (vw) vw.textContent = '👁 ' + (pl.viewers || 0).toLocaleString('en-US') + ' watching';
+      if (segIdx < 0) segIdx = Math.max(0, segs.length - 2); // join at the live edge
+      if (segIdx < segs.length) {
+        const url = segs[segIdx];
+        v.src = url;
+        v.play().catch(() => {});
+        statusEl.textContent = ended ? 'Final moments…' : '🔴 Live — you are watching in real time';
+        v.onended = () => { segIdx++; nextSeg(); };
+      } else {
+        statusEl.textContent = ended ? 'Stream ended 🔴' : 'Reconnecting…';
+        setTimeout(nextSeg, ended ? 4000 : 3000);
+      }
     }
-
-    async function nextSeg() { /* legacy polling fallback (unused for P2P) */ }
-    startP2PView();
+    nextSeg();
   }
 
-  /* ═══════════ router ═══════════ */
-  const routes = [
-    [/^\/?$/,                 q => viewHome(q)],
-    [/^\/home$/,              q => viewHome(q)],
-    [/^\/shorts\/?(.+)?$/,    m => viewShorts(m[1])],
-    [/^\/subscriptions$/,     () => viewSubs()],
-    [/^\/library$/,           () => viewLibrary()],
-    [/^\/upload$/,            () => viewUpload()],
-    [/^\/settings$/,          () => viewSettings()],
-    [/^\/login$/,             () => viewLogin()],
-    [/^\/live$/,              () => viewGoLive()],
-    [/^\/live\/([\w-]+)$/,   m => viewLiveStream(m[1])],
-    [/^\/channel$/,           () => viewMyChannel()],
-    [/^\/c\/(.+)$/,           m => viewChannel(m[1])],
-    [/^\/watch\/([\w-]+)$/,   m => viewWatch(m[1])],
-    [/^\/results$/,           q => viewResults(q)],
-  ];
 
   function navName(path) {
     if (/^\/?$|\/home|\/watch|\/results/.test(path)) return 'home';
