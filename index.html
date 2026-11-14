@@ -14,8 +14,8 @@
 <link rel="preconnect" href="https://txiuvpmabhcawqolomjp.supabase.co">
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 <noscript><link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
-<link rel="stylesheet" href="css/style.css?v=79">
-<script>window.YV_V = 79;</script>
+<link rel="stylesheet" href="css/style.css?v=80">
+<script>window.YV_V = 80;</script>
 </head>
 <body>
 
@@ -37,6 +37,7 @@
 
   <div class="top-actions">
     <button class="notif-btn" id="notifBtn" title="Notifications">🔔<span class="notif-count" id="notifCount"></span></button>
+    <button class="notif-btn" id="helpBtn" title="Help chat — talk to the YourVibe admin">💬<span class="notif-count" id="helpCount"></span></button>
     <a class="upload-btn" href="#/upload"><span class="ub-ico">＋</span><span class="ub-lbl">Upload</span></a>
     <a href="#/channel" class="me-avatar" id="meAvatar" title="Your channel"></a>
   </div>
@@ -78,15 +79,22 @@
 </nav>
 
 <div class="notif-panel hide" id="notifPanel"><div class="notif-head">🔔 Notifications</div><div class="notif-list" id="notifList"></div></div>
+<div class="notif-panel help-panel hide" id="helpPanel">
+  <div class="notif-head">💬 Help chat <span class="vrf-badge" title="YourVibe team">✓</span></div>
+  <div class="help-list" id="helpList"></div>
+  <form class="help-input" id="helpForm" autocomplete="off">
+    <input id="helpText" maxlength="500" placeholder="Describe your problem…">
+    <button class="pill-btn" type="submit">➤</button>
+  </form>
+</div>
 <div class="toasts" id="toasts"></div>
 
 <noscript><div style="padding:40px;text-align:center;font-family:sans-serif">YourVibe needs JavaScript ⚡</div></noscript>
 
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="js/data.js?v=79"></script>
-<script src="js/storage.js?v=79"></script>
+<script src="js/data.js?v=80"></script>
+<script src="js/storage.js?v=80"></script>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
-<script src="js/bunny.js?v=79"></script>
-<script src="js/app.js?v=79"></script>
+<script src="js/bunny.js?v=80"></script>
+<script src="js/app.js?v=80"></script>
 </body>
 </html>
