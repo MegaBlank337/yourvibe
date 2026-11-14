@@ -1045,8 +1045,23 @@ body.has-ann main { padding-top: 138px; }
 .help-who { font-weight: 700; font-size: 12px; margin-bottom: 3px; display: flex; align-items: center; gap: 6px; }
 .help-txt { font-size: 14px; line-height: 1.45; word-break: break-word; }
 .help-time { font-size: 11px; color: rgba(255,255,255,.35); margin-top: 3px; }
-.help-input { flex: 0 0 auto; display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
-.help-input input { flex: 1; }
+.help-input {
+  flex: 0 0 auto; display: flex; gap: 8px; padding: 10px 12px;
+  border-top: 1px solid var(--line); background: rgba(3, 6, 16, .55);
+}
+.help-input input {
+  flex: 1; background: rgba(255, 255, 255, .05);
+  border: 1px solid rgba(0, 229, 255, .22); border-radius: 12px;
+  color: var(--txt); padding: 10px 14px; outline: none;
+  font-size: 13.5px; font-weight: 500; transition: border-color .2s, box-shadow .2s;
+}
+.help-input input::placeholder { color: rgba(234, 246, 255, .32); }
+.help-input input:focus { border-color: rgba(0, 229, 255, .55); box-shadow: 0 0 12px rgba(0, 229, 255, .12); background: rgba(255, 255, 255, .07); }
+.help-input .pill-btn {
+  background: rgba(10, 14, 30, .9); border: 1px solid rgba(0, 229, 255, .45);
+  color: var(--cyan); box-shadow: none; padding: 8px 14px;
+}
+.help-input .pill-btn:hover { box-shadow: 0 0 10px rgba(0, 229, 255, .25); }
 .adm-sup-list { max-height: 220px; overflow-y: auto; background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
 .adm-sup { padding: 4px 2px; font-size: 13px; line-height: 1.5; border-bottom: 1px dashed rgba(255,255,255,.06); }
 .adm-sup:last-child { border-bottom: none; }
