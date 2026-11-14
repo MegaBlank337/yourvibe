@@ -67,6 +67,7 @@
     NOTIFS = b.notifications || [];
     videosLoaded = true;
     if (b.announcement !== undefined) { ANN = b.announcement; renderAnnouncement(); }
+    renderNotifs();
     if (b.me && S.auth && S.auth.token) {
       if (b.me.avatar_url) { S.acctAvatar = b.me.avatar_url; AVATARS[S.auth.username.toLowerCase()] = b.me.avatar_url; }
       if (b.me.banner_url) S.acctBanner = b.me.banner_url;
@@ -212,6 +213,14 @@
   const viewsOf = v => Number(v.views) || 0;
   const subsOfCreator = name => Number(CREATORS[name]) || 0;
   const agoOf = v => timeAgo(v.created_at ? Date.parse(v.created_at) : 0);
+  /* thumbnails: bunny-cdn thumbs are hotlink-protected — proxy them same-origin */
+  function thumbSrc(v) {
+    if (v.store === 'bunny' && v.thumb_url && v.thumb_url.includes('b-cdn')) {
+      return API_BASE + '/api/thumb/' + v.id;
+    }
+    return v.thumb_url || '';
+  }
+
   /* multi-segment videos stream through the API as one file.
      Publisher's own fresh bunny video → play the LOCAL file instantly (no encoding wait) */
   const srcOf = v => {
@@ -274,7 +283,7 @@
   function thumbHTML(v) {
     const up = upOf(v);
     const p = up.colors;
-    const img = v.thumb_url ? '<img loading="lazy" src="' + v.thumb_url + '" alt="" onerror="this.style.display=\'none\'">' : '';
+    const img = v.thumb_url ? '<img loading="lazy" src="' + thumbSrc(v) + '" alt="" onerror="this.style.display=\'none\'">' : '';
     const ghost = v.type === 'short' ? '⚡' : '▶';
     return '<div class="thumb" style="--c1:' + p[0] + ';--c2:' + p[1] + '">'
       + img
@@ -300,7 +309,7 @@
     const up = upOf(v);
     return '<a class="compact-card" href="#/watch/' + v.id + '">'
       + '<div class="thumb sm" style="--c1:' + up.colors[0] + ';--c2:' + up.colors[1] + '">'
-      + (v.thumb_url ? '<img loading="lazy" src="' + v.thumb_url + '" alt="" onerror="this.style.display=\'none\'">' : '')
+      + (v.thumb_url ? '<img loading="lazy" src="' + thumbSrc(v) + '" alt="" onerror="this.style.display=\'none\'">' : '')
       + '<span class="thumb-ghost' + (v.thumb_url ? ' small' : '') + '">' + (v.type === 'short' ? '⚡' : '▶') + '</span>'
       + (v.duration ? '<span class="dur">' + esc(v.duration) + '</span>' : '')
       + '</div>'
@@ -314,7 +323,7 @@
     const up = upOf(s);
     return '<a class="short-card" href="#/shorts/' + s.id + '">'
       + '<div class="thumb vert" style="--c1:' + up.colors[0] + ';--c2:' + up.colors[1] + '">'
-      + (s.thumb_url ? '<img loading="lazy" src="' + s.thumb_url + '" alt="" onerror="this.style.display=\'none\'">' : '')
+      + (s.thumb_url ? '<img loading="lazy" src="' + thumbSrc(s) + '" alt="" onerror="this.style.display=\'none\'">' : '')
       + '<span class="thumb-ghost' + (s.thumb_url ? ' small' : '') + '">⚡</span>'
       + '</div>'
       + '<h4>' + esc(s.title) + '</h4>'
@@ -556,7 +565,7 @@
         + '</div>';
     }
     return '<div class="player' + (vert ? ' vert' : '') + '" id="yvPlayer">'
-      + '<video id="yvVideo" data-vid="' + v.id + '" src="' + src + '" playsinline ' + (v.thumb_url ? 'poster="' + v.thumb_url + '" ' : '') + '></video>'
+      + '<video id="yvVideo" data-vid="' + v.id + '" src="' + src + '" playsinline ' + (v.thumb_url ? 'poster="' + thumbSrc(v) + '" ' : '') + '></video>'
       + '<div class="v-spin" id="yvSpin"><i></i></div>'
       + '<button class="big-play" id="yvBig" aria-label="Play">▶</button>'
       + '<div class="controls">'
