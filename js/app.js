@@ -668,6 +668,60 @@
     commentsHTML(v).then(html => { const slot = $('#comments-slot'); if (slot) slot.outerHTML = html; });
     loadPoll(v.id);
 
+    /* ended live stream (VOD): sequential webm segments, full comments/likes UI */
+    if (v.store === 'live') {
+      let segs = [];
+      try { segs = JSON.parse(v.sizes || '[]'); } catch (e) {}
+      if (!Array.isArray(segs) || !segs.length) {
+        main.innerHTML = '<div class="page"><div class="empty"><div class="empty-ico">📡</div><h3>VOD unavailable</h3></div></div>';
+        return;
+      }
+      main.innerHTML = '<div class="watch">'
+        + '<div class="watch-main">'
+        + '<div class="player" id="yvPlayer">'
+        + '<video id="yvVideo" data-vid="' + v.id + '" playsinline autoplay></video>'
+        + '<div class="v-spin" id="yvSpin"><i></i></div>'
+        + '<div class="controls">'
+        + '<div class="seek" id="yvSeek"><div class="seek-buffer" id="yvBuf"></div><div class="seek-fill" id="yvFill"><i class="seek-knob"></i></div></div>'
+        + '<div class="ctl-row">'
+        + '<button class="ctl-btn" id="yvPlayB" title="Play / Pause (k)">⏸</button>'
+        + '<span class="time" id="liveSeg">Segment 1/' + segs.length + '</span>'
+        + '<span class="ctl-spacer"></span>'
+        + '<button class="ctl-btn" id="yvFull" title="Fullscreen (f)">⛶</button>'
+        + '</div></div></div>'
+        + '<h1 class="w-title">' + esc(v.title) + '</h1>'
+        + '<div class="w-row">'
+        + '<div class="ch-link">' + avatarHTML(up, 42)
+        + '<div><div class="wl-name">' + nameHTML(v.uploader) + '</div>'
+        + '<div class="wl-subs">' + fmtNum(subsOfCreator(v.uploader)) + ' subscribers</div></div></div>'
+        + subBtnHTML(v.uploader)
+        + '<span class="w-spacer"></span>'
+        + likeGroupHTML(v)
+        + '<button class="act-btn" data-action="share" data-id="' + v.id + '">🔗 Share</button>'
+        + '<span class="w-spacer"></span>'
+        + '</div>'
+        + '<div class="w-desc"><b>' + fmtNum(viewsOf(v)) + ' views · ' + agoOf(v) + ' · 🔴 was LIVE</b><br>' + esc(v.description || '') + '</div>'
+        + '<div id="comments-slot">' + loadingHTML() + '</div>'
+        + '</div></div>';
+
+      let segI = 0;
+      const nv = $('#yvVideo');
+      const segLabel = $('#liveSeg');
+      const loadSeg = i => {
+        segI = Math.max(0, Math.min(segs.length - 1, i));
+        nv.src = segs[segI];
+        if (segLabel) segLabel.textContent = 'Segment ' + (segI + 1) + '/' + segs.length;
+      };
+      loadSeg(0);
+      nv.addEventListener('ended', () => {
+        if (segI < segs.length - 1) { loadSeg(segI + 1); nv.play().catch(() => {}); }
+      });
+      initPlayer();
+
+      commentsHTML(v).then(html => { const slot = $('#comments-slot'); if (slot) slot.outerHTML = html; });
+      return;
+    }
+
     /* bunny video: resolve CDN URLs, play via HLS (adaptive — instant start) */
     if ((v.store === 'bunny' || /iframe\.mediadelivery\.net/.test(srcOf(v) || '')) && !LOCAL_PLAYBACK[v.id]) {
       (async () => {
@@ -2031,6 +2085,9 @@
       + '<label class="rd"><input type="radio" name="liveSrc" value="screen" checked> 🖥️ Screen</label>'
       + '<label class="rd"><input type="radio" name="liveSrc" value="camera"> 📷 Camera</label>'
       + '</div></div>'
+      + '<div class="field"><div class="radio-row">'
+      + '<label class="rd"><input type="checkbox" id="liveAutoChat" checked> 💬 Auto live chat (fake comments)</label>'
+      + '</div></div>'
       + '<div class="form-err" id="liveErr"></div>'
       + '<button class="btn-neon live-btn" id="liveStart" type="button">🔴 Go Live</button>'
       + '</form></div></div>';
@@ -2047,9 +2104,18 @@
         return;
       }
       const title = ($('#liveTitle').value || '').trim() || (myName() + ' is live');
+      /* capture a thumbnail frame from the preview */
+      let thumb = null;
+      try {
+        const pv = $('#livePrev');
+        const cv = document.createElement('canvas');
+        cv.width = 640; cv.height = 360;
+        cv.getContext('2d').drawImage(pv, 0, 0, 640, 360);
+        thumb = cv.toDataURL('image/jpeg', 0.8);
+      } catch (e) {}
       let id;
       try {
-        const r = await api('/api/live/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
+        const r = await api('/api/live/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, thumb }) });
         id = r.id;
       } catch (e) { $('#liveErr').textContent = '⚠️ ' + (e.message || 'server error'); stream.getTracks().forEach(tr => tr.stop()); return; }
       liveStreamId = id; liveChunksSent = 0;
@@ -2070,7 +2136,22 @@
       };
 
       let secs = 0;
-      liveTimer = setInterval(() => { secs++; btn.textContent = '⏹ End stream — ' + Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0') + ' · ' + liveChunksSent + ' segs'; }, 1000);
+      const autoChat = $('#liveAutoChat') && $('#liveAutoChat').checked;
+      liveTimer = setInterval(async () => {
+        secs++;
+        let viewers = '';
+        try { const pl = await api('/api/live/' + id + '/playlist'); viewers = ' · 👁 ' + (pl.viewers || 0).toLocaleString('en-US'); } catch (e) {}
+        btn.textContent = '⏹ End — ' + Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0') + ' · ' + liveChunksSent + ' segs' + viewers;
+      }, 1000);
+      if (autoChat) {
+        const chatPool = ['🔥🔥🔥', 'lets gooo', 'first!!', 'POGGERS', 'W stream', 'hello from Germany 🇩🇪', 'how long will you stream?', '🎉🎉', 'BEST STREAMER', 'hi bro', '🔥', 'from Ukraine 🇺🇦 ❤️', 'GG', 'the king is live 👑', 'chat is this real', 'yo!!', 'play roblox please', ' Lol ', 'nice one', '😍😍'];
+        const chatPool2 = ['NeonFox', 'CyberWolf', 'PixelCat', 'TurboBanana', 'DarkGamer', 'MoonBoy', 'LuckyPlayer', 'RobloxKing', 'StreamFan_1', 'ProGamer_77'];
+        liveTimer = setInterval(async () => {
+          const author = chatPool2[Math.floor(Math.random() * chatPool2.length)] + Math.floor(Math.random() * 99);
+          const text = chatPool[Math.floor(Math.random() * chatPool.length)];
+          try { await api('/api/videos/' + id + '/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ author, text }) }); } catch (e) {}
+        }, 2500 + Math.random() * 2500);
+      }
 
       liveRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000 });
       liveRecorder.ondataavailable = async e => {
@@ -2102,18 +2183,59 @@
       await new Promise(r => setTimeout(r, 3000));
     }
 
-    main.innerHTML = '<div class="page live-view-page">'
+    main.innerHTML = '<div class="live-layout" id="liveWrap">'
       + '<div class="player" id="livePlayer">'
       + '<video id="liveVideo" autoplay playsinline></video>'
       + '<div class="live-badge"><span class="live-dot"></span>LIVE</div>'
       + '</div>'
+      + '<div class="chat-panel" id="liveChat">'
+      + '<div class="chat-head">💬 Live chat <span class="vrf-badge" title="Verified">✓</span></div>'
+      + '<div class="chat-list" id="chatList"></div>'
+      + '<form class="chat-input" id="chatForm"><input id="chatText" maxlength="150" placeholder="Say something…"><button class="pill-btn">➤</button></form>'
+      + '</div>'
+      + '</div>'
       + '<h1 class="w-title" id="liveTitleEl"></h1>'
-      + '<div class="w-row"><div class="wl-name" id="liveBroadEl"></div></div>'
+      + '<div class="w-row"><div class="wl-name" id="liveBroadEl"></div><span class="live-viewers" id="liveViewers"></span></div>'
       + '<p class="muted-txt" id="liveStatus">Streaming…</p>'
       + '</div>';
 
     const v = $('#liveVideo');
     const statusEl = $('#liveStatus');
+
+
+    /* live chat (comments of the stream video) */
+    let chatSeen = 0;
+    function renderChat(list) {
+      const cl = $('#chatList');
+      if (!cl) return;
+      const fresh = list.slice().reverse().filter(c => c.id > chatSeen);
+      fresh.forEach(c => cl.insertAdjacentHTML('beforeend', chatItemHTML(c)));
+      if (fresh.length) { cl.scrollTop = cl.scrollHeight; chatSeen = Math.max(chatSeen, ...list.map(c => c.id)); }
+    }
+    function chatItemHTML(c) {
+      const pal = palFor(c.author);
+      return '<div class="chat-msg">' + avatarHTML({ name: c.author, colors: pal }, 26)
+        + '<div class="chat-mbody"><span class="chat-mauthor">' + nameHTML(c.author) + '</span>'
+        + '<span class="chat-mtext">' + esc(c.text) + '</span></div></div>';
+    }
+    async function pollChat() {
+      try { const list = await api('/api/videos/' + id + '/comments'); renderChat(list); } catch (e) {}
+    }
+    pollChat();
+    const chatPoller = setInterval(() => { if (!document.querySelector('#liveChat')) { clearInterval(chatPoller); return; } pollChat(); }, 4000);
+    cleanups.push(() => clearInterval(chatPoller));
+    const cf = $('#chatForm');
+    if (cf) cf.onsubmit = async e => {
+      e.preventDefault();
+      const inp = $('#chatText');
+      const text = inp.value.trim();
+      if (!text) return;
+      inp.value = '';
+      try {
+        await api('/api/videos/' + id + '/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ author: myName(), text }) });
+        pollChat();
+      } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
+    };
 
     async function nextSeg() {
       if (ended) { statusEl.textContent = 'Stream ended 🔴'; return; }
@@ -2123,7 +2245,9 @@
       ended = pl.status === 'ended';
       const segs = pl.segs || [];
       $('#liveTitleEl').textContent = pl.title || '';
-      $('#liveBroadEl').textContent = 'by ' + pl.broadcaster;
+      $('#liveBroadEl').innerHTML = 'by ' + nameHTML(pl.broadcaster);
+      const vw = $('#liveViewers');
+      if (vw) vw.textContent = '👁 ' + (pl.viewers || 0).toLocaleString('en-US') + ' watching';
       if (segIdx < 0) segIdx = Math.max(0, segs.length - 2); // join at the live edge
       if (segIdx < segs.length) {
         const url = segs[segIdx];
