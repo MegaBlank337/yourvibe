@@ -550,7 +550,7 @@ const clientIp = req => String((req.headers && req.headers['x-forwarded-for']) |
 /* ONE round-trip boot: feed + creators + avatars + announcement + account */
 app.get('/api/boot', async (req, res) => {
   try {
-    const vids = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,store,created_at
+    const vids = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,sizes,store,created_at
                           from videos order by created_at desc limit 200`);
     let creators = {};
     const verifiedNames = [];
@@ -766,7 +766,7 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/api/videos', async (req, res) => {
   try {
-    const r = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,store,created_at
+    const r = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,sizes,store,created_at
                        from videos order by created_at desc limit 200`);
     res.json(r.rows.map(row => Object.assign({}, row, {
       views: num(row.views), likes: num(row.likes),
@@ -1514,11 +1514,36 @@ app.post('/api/live/start', async (req, res) => {
     const username = await authUser(req);
     if (!username) return res.status(401).json({ error: 'log in to go live' });
     const token = req.get('x-auth') || '';
-    const title = String((req.body && req.body.title) || '').slice(0, 100) || (username + ' is live');
+    const b = req.body || {};
+    const title = String(b.title || '').slice(0, 100) || (username + ' is live');
     const id = crypto.randomUUID();
-    liveStreams.set(id, { id, title, broadcaster: username, token, header: null, segs: [], n: 0, lastSeg: Date.now(), status: 'live', startedAt: Date.now() });
-    res.status(201).json({ id, title, broadcaster: username });
-  } catch (e) { res.status(500).json({ error: 'failed' }); }
+
+    /* client-captured thumbnail (frame from the preview) → stored instantly */
+    let thumbUrl = null;
+    const thumbData = String(b.thumb || '');
+    if (thumbData.startsWith('data:image/') && thumbData.length < 2000000) {
+      try {
+        const tp = 'thumbs/live-' + id + '.jpg';
+        await sbPut(tp, Buffer.from(thumbData.split(',')[1], 'base64'), 'image/jpeg');
+        thumbUrl = pubUrl(tp);
+      } catch (e) {}
+    }
+
+    /* fake viewers: random base + growth rate per stream */
+    const viewersBase = 30 + crypto.randomInt(150);
+    const viewersRate = 0.5 + Math.random() * 1.8;
+
+    liveStreams.set(id, { id, title, broadcaster: username, token, header: null, segs: [], n: 0, lastSeg: Date.now(), status: 'live', startedAt: Date.now(), thumbUrl, viewersBase, viewersRate });
+    try {
+      await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,video_url,thumb_url,del_key,parts,sizes,store)
+               values ($1,$2,'','Other','video','LIVE',$3,$4,'',$5,$6,$7,0,'[]','live')`,
+        [id, title, username, 'live:' + id, '', thumbUrl, crypto.randomBytes(16).toString('hex')]);
+    } catch (e) {}
+    res.status(201).json({ id, title, broadcaster: username, viewers: viewersBase });
+  } catch (e) {
+    console.error('live start error:', e.message);
+    res.status(500).json({ error: 'failed' });
+  }
 });
 
 app.post('/api/live/:id/seg', async (req, res) => {
@@ -1553,20 +1578,35 @@ app.post('/api/live/:id/seg', async (req, res) => {
 app.get('/api/live/:id/playlist', (req, res) => {
   const st = liveStreams.get(req.params.id);
   if (!st) return res.json({ status: 'gone' });
-  res.json({ status: st.status, title: st.title, broadcaster: st.broadcaster, segs: st.segs, startedAt: st.startedAt });
+  const elapsed = Math.max(1, Math.round((Date.now() - st.startedAt) / 1000));
+  const viewers = Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + elapsed * st.viewersRate + crypto.randomInt(15)));
+  res.json({ status: st.status, title: st.title, broadcaster: st.broadcaster, segs: st.segs, startedAt: st.startedAt, thumb: st.thumbUrl, viewers });
 });
 
-app.post('/api/live/:id/end', (req, res) => {
+app.post('/api/live/:id/end', async (req, res) => {
   const st = liveStreams.get(req.params.id);
   if (!st) return res.status(404).json({ error: 'not found' });
   if (req.get('x-auth') !== st.token) return res.status(403).json({ error: 'not the broadcaster' });
   st.status = 'ended';
-  res.json({ ok: true, segments: st.segs.length });
+  const durSec = Math.max(1, Math.round((Date.now() - st.startedAt) / 1000));
+  const duration = Math.floor(durSec / 60) + ':' + String(durSec % 60).padStart(2, '0');
+  const peak = Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + durSec * st.viewersRate));
+  try {
+    await q(`update videos set video_url = $2, parts = $3, sizes = $4, duration = $5, views = $6 where id = $1`,
+      [st.id, st.segs[0] || '', st.segs.length, JSON.stringify(st.segs), duration, peak]);
+    metaCache.delete(st.id);
+  } catch (e) { console.error('live end db:', e.message); }
+  res.json({ ok: true, segments: st.segs.length, duration, viewers: peak });
 });
 
 app.get('/api/live', (req, res) => {
   const out = [];
-  liveStreams.forEach(st => { if (st.status === 'live') out.push({ id: st.id, title: st.title, broadcaster: st.broadcaster, startedAt: st.startedAt }); });
+  liveStreams.forEach(st => {
+    if (st.status !== 'live') return;
+    const elapsed = Math.max(1, Math.round((Date.now() - st.startedAt) / 1000));
+    const viewers = Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + elapsed * st.viewersRate));
+    out.push({ id: st.id, title: st.title, broadcaster: st.broadcaster, startedAt: st.startedAt, thumb: st.thumbUrl, viewers });
+  });
   res.json(out);
 });
 
