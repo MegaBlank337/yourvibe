@@ -2389,6 +2389,22 @@
   }
 
 
+const routes = [
+    [/^\/?$/,                 q => viewHome(q)],
+    [/^\/home$/,              q => viewHome(q)],
+    [/^\/shorts\/?(.+)?$/,    m => viewShorts(m[1])],
+    [/^\/subscriptions$/,     () => viewSubs()],
+    [/^\/library$/,           () => viewLibrary()],
+    [/^\/upload$/,            () => viewUpload()],
+    [/^\/settings$/,          () => viewSettings()],
+    [/^\/login$/,             () => viewLogin()],
+    [/^\/live$/,              () => viewGoLive()],
+    [/^\/live\/([\w-]+)$/,   m => viewLiveStream(m[1])],
+    [/^\/channel$/,           () => viewMyChannel()],
+    [/^\/c\/(.+)$/,           m => viewChannel(m[1])],
+    [/^\/watch\/([\w-]+)$/,   m => viewWatch(m[1])],
+    [/^\/results$/,           q => viewResults(q)],
+  ];
   function navName(path) {
     if (/^\/?$|\/home|\/watch|\/results/.test(path)) return 'home';
     if (path.startsWith('/live')) return 'live';
