@@ -712,6 +712,10 @@
         nv.src = segs[segI];
         if (segLabel) segLabel.textContent = 'Segment ' + (segI + 1) + '/' + segs.length;
       };
+      /* broken segment (404/decode fail) → skip forward automatically */
+      nv.addEventListener('error', () => {
+        if (segI < segs.length - 1) { loadSeg(segI + 1); nv.play().catch(() => {}); }
+      });
       loadSeg(0);
       nv.addEventListener('ended', () => {
         if (segI < segs.length - 1) { loadSeg(segI + 1); nv.play().catch(() => {}); }
