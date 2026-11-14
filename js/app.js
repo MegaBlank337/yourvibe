@@ -44,6 +44,7 @@
   }
 
   let VERIFIED = new Set();   // creator names with the verified badge
+  let COLORS = {};            // creator name -> channel rank color (bronze..ruby)
   let NOTIFS = [];            // admin notifications (latest 10)
   let VIDEOS = [];
   let CREATORS = {};   // { uploaderName: subscriberCount }
@@ -63,6 +64,7 @@
     VIDEOS = b.videos || [];
     CREATORS = b.creators || {};
     AVATARS = Object.assign({}, b.avatars || {});
+    COLORS = b.colors || {};
     VERIFIED = new Set(b.verified || []);
     NOTIFS = b.notifications || [];
     videosLoaded = true;
@@ -72,6 +74,7 @@
       if (b.me.avatar_url) { S.acctAvatar = b.me.avatar_url; AVATARS[S.auth.username.toLowerCase()] = b.me.avatar_url; }
       if (b.me.banner_url) S.acctBanner = b.me.banner_url;
       if (b.me.bio) S.myChannel.bio = b.me.bio;
+      if (b.me.channel_color) S.myColor = b.me.channel_color;
       renderMe();
     }
     saveFeedCache();
@@ -247,6 +250,19 @@
   }
 
   /* ═══════════ avatar & buttons ═══════════ */
+  /* channel rank colors (bronze → ruby) */
+  const RANKS = {
+    bronze: { hex: '#cd7f32', label: 'Bronze' },
+    silver: { hex: '#c9c9c9', label: 'Silver' },
+    gold:   { hex: '#ffd700', label: 'Gold' },
+    diamond: { hex: '#9be7ff', label: 'Diamond' },
+    ruby:   { hex: '#ff5e7e', label: 'Ruby' },
+  };
+  function rankOf(name) {
+    const c = (COLORS[name] || '').toLowerCase();
+    return RANKS[c] ? { key: c, hex: RANKS[c].hex, label: RANKS[c].label } : null;
+  }
+
   /* verified badge next to a creator name */
   function nameHTML(name, cls) {
     const badge = VERIFIED.has(name) ? ' <span class="vrf-badge" title="Verified">✓</span>' : '';
@@ -477,7 +493,7 @@
       + '<div class="banner"' + ((S.acctBanner || c.banner) ? ' style="background-image:url(' + (S.acctBanner || c.banner) + ')"' : ' style="--c1:' + c.colors[0] + ';--c2:' + c.colors[1] + '"') + '></div>'
       + '<div class="ch-head">'
       + '<span class="ch-ava">' + avatarHTML(meCh(), 96) + '</span>'
-      + '<div class="ch-id"><h1 class="ch-name-big">' + nameHTML(myName()) + '</h1>'
+      + '<div class="ch-id"><h1 class="ch-name-big rank-name"' + (rankOf(myName()) ? ' style="color:' + rankOf(myName()).hex + ';text-shadow:0 0 18px ' + rankOf(myName()).hex + '66"' : '') + '>' + nameHTML(myName()) + (rankOf(myName()) ? ' <span class="rank-chip" style="border-color:' + rankOf(myName()).hex + ';color:' + rankOf(myName()).hex + '">' + rankOf(myName()).label + '</span>' : '') + '</h1>'
       + '<div class="ch-sub">' + fmtNum(subsOfCreator(myName())) + ' subscribers · ' + fmtNum(totalViews) + ' views · ' + mine.length + ' upload' + (mine.length === 1 ? '' : 's') + '</div></div>'
       + '<div class="ch-actions"><a class="btn-neon" href="#/upload">＋ Upload</a>'
       + '<a class="pill-btn ghost" href="#/settings">⚙ Customize channel</a></div>'
@@ -513,7 +529,7 @@
       + '<div class="banner def" style="--c1:' + pal[0] + ';--c2:' + pal[1] + '"></div>'
       + '<div class="ch-head">'
       + '<span class="ch-ava">' + avatarHTML({ name: n, colors: pal, isMe: n === S.myChannel.name }, 96) + '</span>'
-      + '<div class="ch-id"><h1 class="ch-name-big">' + nameHTML(n) + '</h1>'
+      + '<div class="ch-id"><h1 class="ch-name-big rank-name"' + (rankOf(n) ? ' style="color:' + rankOf(n).hex + ';text-shadow:0 0 18px ' + rankOf(n).hex + '66"' : '') + '>' + nameHTML(n) + (rankOf(n) ? ' <span class="rank-chip" style="border-color:' + rankOf(n).hex + ';color:' + rankOf(n).hex + '">' + rankOf(n).label + '</span>' : '') + '</h1>'
       + '<div class="ch-sub">' + fmtNum(subsOfCreator(n)) + ' subscribers · ' + vids.length + ' video' + (vids.length === 1 ? '' : 's') + '</div></div>'
       + subBtnHTML(n)
       + '</div>'
@@ -1185,6 +1201,14 @@
       + '<div class="field"><label>Profile picture</label><div class="file-row">'
       + '<button type="button" class="pill-btn ghost" id="avaBtn">🖼 Choose avatar</button>'
       + '<input type="file" id="avaIn" accept="image/*" hidden><span class="muted-txt" id="avaMsg"></span></div></div>'
+      + '<div class="field"><label>Channel color</label><select id="stColor">'
+      + '<option value="">Default (no rank)</option>'
+      + '<option value="bronze"' + (c.color === 'bronze' ? ' selected' : '') + '>🥉 Bronze — 10K followers</option>'
+      + '<option value="silver"' + (c.color === 'silver' ? ' selected' : '') + '>🥈 Silver — 100K followers</option>'
+      + '<option value="gold"' + (c.color === 'gold' ? ' selected' : '') + '>🥇 Gold — 1M followers</option>'
+      + '<option value="diamond"' + (c.color === 'diamond' ? ' selected' : '') + '>💎 Diamond — 10M followers</option>'
+      + '<option value="ruby"' + (c.color === 'ruby' ? ' selected' : '') + '>🔴 Ruby — 100M followers</option>'
+      + '</select><p class="muted-txt">colors your name + avatar ring on your channel</p></div>'
       + '<div class="field"><label>Banner</label><div class="file-row">'
       + '<button type="button" class="pill-btn ghost" id="banBtn">🌅 Choose banner</button>'
       + '<input type="file" id="banIn" accept="image/*" hidden><span class="muted-txt" id="banMsg"></span></div></div>'
@@ -1203,7 +1227,7 @@
       $('#avaMsg').textContent = avaData ? '✅ ready' : '⚠️ could not read image (try a JPG/PNG)';
       if (avaData) {
         $('#prevAva').innerHTML = '<span class="av av-img" style="width:72px;height:72px"><img src="' + avaData + '"></span>';
-        if (S.auth && S.auth.token) saveProfileToAccount({ avatar: avaData, banner: banData, bio: $('#stBio').value.trim() }); // instant account save
+        if (S.auth && S.auth.token) { const sel = $('#stColor'); saveProfileToAccount({ avatar: avaData, banner: banData, bio: $('#stBio').value.trim(), color: sel ? sel.value : undefined }); } // instant account save
       }
     };
     $('#banIn').onchange = async e => {
@@ -1235,7 +1259,7 @@
         api('/api/auth/profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ avatar: avaData, banner: banData, bio: $('#stBio').value.trim() })
+          body: JSON.stringify({ avatar: avaData, banner: banData, bio: $('#stBio').value.trim(), color: $('#stColor') ? $('#stColor').value : undefined })
         }).then(() => { AVATARS[S.auth.username.toLowerCase()] = avaData; navigate(); }).catch(() => {});
       }
       toast('Channel updated', '✨');
@@ -1436,6 +1460,7 @@
       if (r.avatar_url) { S.acctAvatar = r.avatar_url; AVATARS[S.auth.username.toLowerCase()] = r.avatar_url; }
       if (r.banner_url) { S.acctBanner = r.banner_url; }
       if (r.bio !== undefined) S.myChannel.bio = r.bio || S.myChannel.bio;
+      if (r.color !== undefined) { S.myColor = r.color || null; if (S.auth && S.auth.username) COLORS[S.auth.username] = r.color || undefined; }
       YV.store.save();
       renderMe();
     } catch (e) {}
