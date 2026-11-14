@@ -2316,8 +2316,9 @@
 
     main.innerHTML = '<div class="live-layout" id="liveWrap">'
       + '<div class="player" id="livePlayer">'
-      + '<video id="liveVideo" autoplay playsinline></video>'
+      + '<video id="liveVideo" playsinline></video>'
       + '<div class="live-badge"><span class="live-dot"></span>LIVE</div>'
+      + '<button class="big-play" id="livePlayBig" aria-label="Play">▶</button>'
       + '</div>'
       + '<div class="chat-panel" id="liveChat">'
       + '<div class="chat-head">💬 Live chat <span class="vrf-badge" title="Verified">✓</span></div>'
@@ -2374,8 +2375,13 @@
         const call = peer.call('yourvibe-live-' + id, null); // receive-only
         call.on('stream', remote => {
           v.srcObject = remote;
-          v.play().catch(() => {});
-          statusEl.textContent = '🔴 Live — watching in real time';
+          statusEl.textContent = '🔴 Live — press ▶ to start watching';
+          /* browsers block autoplay with sound — start on the play button click */
+          const pb = document.querySelector('#livePlayBig');
+          if (pb) {
+            pb.onclick = () => { v.play().catch(() => {}); };
+          }
+          v.onplaying = () => { const b2 = document.querySelector('#livePlayBig'); if (b2) b2.remove(); };
         });
         call.on('close', () => { statusEl.textContent = '🔴 Stream ended'; });
         call.on('error', () => { statusEl.textContent = '🔴 Connection error — retrying…'; setTimeout(startP2PView, 3000); });
