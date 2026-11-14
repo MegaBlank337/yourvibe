@@ -2440,6 +2440,7 @@
       + '<div class="field"><label>Source</label><div class="radio-row">'
       + '<label class="rd"><input type="radio" name="liveSrc" value="screen" checked> 🖥️ Screen</label>'
       + '<label class="rd"><input type="radio" name="liveSrc" value="camera"> 📷 Camera</label>'
+      + '<label class="rd"><input type="checkbox" id="liveMic" checked> 🎙 Mic sound</label>'
       + '</div></div>'
       + '<div class="field"><label>Thumbnail</label>'
       + '<div class="file-row"><button type="button" class="pill-btn ghost" id="thumbCapBtn">📷 Capture frame</button>'
@@ -2493,6 +2494,17 @@
       }
       liveRawStream = stream;
 
+      /* guarantee the mic: screen shares often return a SILENT tab-audio track
+         even when the microphone is allowed — always mix the real mic in */
+      const wantMic = !(document.querySelector('#liveMic') && !document.querySelector('#liveMic').checked);
+      if (wantMic && src === 'screen') {
+        try {
+          const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mic.getAudioTracks().forEach(at => stream.addTrack(at));
+          toast('Микрофон добавлен — тебя слышно 🎙', '🎤');
+        } catch (e) { toast('Микрофон недоступен: ' + e.name, '⚠️'); }
+      }
+
       /* sound check: screen shares only carry audio if "Share audio" was checked */
       if (!stream.getAudioTracks().length) {
         toast('No sound! Enable "Share audio" in the share dialog, or pick Camera to use your mic', '🔇');
@@ -2538,13 +2550,13 @@
   async function viewLiveStream(id) {
     const ICE_VIEWER = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
     main.innerHTML = '<div class="page live-view-page"><div class="loading-box"><div class="spinner"></div><p>Connecting to the stream…</p></div></div>';
+    const showEndedPage = () => {
+      main.innerHTML = '<div class="page"><div class="empty"><div class="empty-ico">🔴</div><h3>LIVE ended</h3><p>This stream is over — recordings appear on the channel.</p><a class="btn-neon" href="#/home">Back home</a></div></div>';
+    };
     for (let i = 0; i < 120; i++) {
       let pl;
       try { pl = await api('/api/live/' + id + '/playlist'); } catch (e) { pl = { status: 'gone' }; }
-      if (pl.status === 'gone') {
-        main.innerHTML = '<div class="page"><div class="empty"><div class="empty-ico">📡</div><h3>Stream offline</h3><p>This live stream has ended or never existed.</p><a class="btn-neon" href="#/home">Back home</a></div></div>';
-        return;
-      }
+      if (pl.status !== 'live') { showEndedPage(); return; }
       if (pl.segs && pl.segs.length >= 2) break;
       await new Promise(r => setTimeout(r, 3000));
     }
@@ -2606,20 +2618,27 @@
        This kills the "plays a few seconds, resets to start" glitch. ── */
     let plMime = '';
     let lastSegCount = 0;
-    let streamEnded = false;
+    let streamOver = false;
     const segUrls = [];
     let msRef = null, sbRef = null, mIdx = 0, mQueue = [], mFetching = false, mRetr = 0, seeked = false;
 
+    /* stream over → kill playback, freeze the player, show the badge */
+    function liveOver() {
+      if (streamOver) return;
+      streamOver = true;
+      try { v.pause(); } catch (e) {}
+      try { v.removeAttribute('src'); v.load(); } catch (e) {}
+      const p = $('#livePlayer');
+      if (p && !p.querySelector('.live-over')) p.insertAdjacentHTML('beforeend', '<div class="live-over">🔴 LIVE ended</div>');
+      if (statusEl) statusEl.textContent = 'This stream is over — recordings appear on the channel 📺';
+    }
+
     function stepMse() {
+      if (streamOver) return;
       if (!sbRef || sbRef.updating) return;
       if (mQueue.length) { const b = mQueue.shift(); try { sbRef.appendBuffer(b); } catch (e) { if (statusEl) statusEl.textContent = 'Playback error ⚠️'; } return; }
       if (mFetching || mIdx >= segUrls.length) {
-        if (!mFetching && mIdx >= segUrls.length) {
-          if (streamEnded) {
-            try { if (msRef.readyState === 'open') msRef.endOfStream(); } catch (e) {}
-            if (statusEl) statusEl.textContent = 'Stream ended 🔴';
-          } else setTimeout(stepMse, 2500); // wait for fresh segments
-        }
+        if (!mFetching && mIdx >= segUrls.length && !streamOver) setTimeout(stepMse, 2500); // wait for fresh segments
         return;
       }
       mFetching = true;
@@ -2639,6 +2658,7 @@
         });
     }
     function startMse() {
+      if (streamOver) return;
       const cands = [plMime, 'video/webm; codecs="vp8,opus"', 'video/webm; codecs="vp9,opus"', 'video/webm'];
       let mime = '';
       for (const m of cands) { if (m && window.MediaSource) { try { if (MediaSource.isTypeSupported(m)) { mime = m; break; } } catch (e) {} } }
@@ -2661,7 +2681,7 @@
       if (!document.querySelector('#liveVideo')) { clearInterval(livePoller); return; }
       try {
         const pl = await api('/api/live/' + id + '/playlist');
-        if (pl.status === 'gone') { clearInterval(livePoller); if (statusEl) statusEl.textContent = 'Stream ended'; return; }
+        if (pl.status !== 'live') { clearInterval(livePoller); liveOver(); return; }
         if (pl.mime) plMime = pl.mime;
         const segs = pl.segs || [];
         if (segs.length > lastSegCount) {
@@ -2672,8 +2692,7 @@
         const te = $('#liveTitleEl'); if (te) te.textContent = pl.title || '';
         const be = $('#liveBroadEl'); if (be) be.innerHTML = 'by ' + nameHTML(pl.broadcaster);
         const vw = $('#liveViewers'); if (vw) vw.textContent = '👁 ' + (pl.viewers || 0).toLocaleString('en-US') + ' watching';
-        if (statusEl) statusEl.textContent = pl.status === 'ended' ? 'Final moments…' : '🔴 Live — you are watching in real time';
-        if (pl.status === 'ended') streamEnded = true;
+        if (statusEl) statusEl.textContent = '🔴 Live — you are watching in real time';
       } catch (e) {}
     }, 3000);
     cleanups.push(() => clearInterval(livePoller));
