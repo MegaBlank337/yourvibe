@@ -314,7 +314,7 @@
       + (v.duration ? '<span class="dur">' + esc(v.duration) + '</span>' : '')
       + '</div>'
       + '<div class="cc-txt"><h4>' + esc(v.title) + '</h4>'
-      + '<div class="ch-name">' + esc(v.uploader) + '</div>'
+      + '<div class="ch-name">' + nameHTML(v.uploader) + '</div>'
       + '<div class="v-stats">' + fmtNum(viewsOf(v)) + ' views · ' + agoOf(v) + '</div>'
       + '</div></a>';
   }
@@ -440,7 +440,7 @@
     main.innerHTML =
       '<h1 class="page-title">Subscriptions</h1>'
       + '<div class="sub-chips">' + names.map(n =>
-        '<a class="sub-chip" href="#/c/' + encodeURIComponent(n) + '">' + avatarHTML({ name: n, colors: palFor(n) }, 44) + '<span>' + esc(n) + '</span></a>').join('') + '</div>'
+        '<a class="sub-chip" href="#/c/' + encodeURIComponent(n) + '">' + avatarHTML({ name: n, colors: palFor(n) }, 44) + '<span>' + nameHTML(n) + '</span></a>').join('') + '</div>'
       + (vids.length ? '<div class="cards">' + vids.map(cardHTML).join('') + '</div>'
         : '<p class="muted-txt pad">No uploads from these creators yet.</p>');
   }
@@ -474,7 +474,7 @@
       + '<div class="banner"' + ((S.acctBanner || c.banner) ? ' style="background-image:url(' + (S.acctBanner || c.banner) + ')"' : ' style="--c1:' + c.colors[0] + ';--c2:' + c.colors[1] + '"') + '></div>'
       + '<div class="ch-head">'
       + '<span class="ch-ava">' + avatarHTML(meCh(), 96) + '</span>'
-      + '<div class="ch-id"><h1 class="ch-name-big">' + esc(myName()) + '</h1>'
+      + '<div class="ch-id"><h1 class="ch-name-big">' + nameHTML(myName()) + '</h1>'
       + '<div class="ch-sub">' + fmtNum(subsOfCreator(myName())) + ' subscribers · ' + fmtNum(totalViews) + ' views · ' + mine.length + ' upload' + (mine.length === 1 ? '' : 's') + '</div></div>'
       + '<div class="ch-actions"><a class="btn-neon" href="#/upload">＋ Upload</a>'
       + '<a class="pill-btn ghost" href="#/settings">⚙ Customize channel</a></div>'
@@ -510,7 +510,7 @@
       + '<div class="banner def" style="--c1:' + pal[0] + ';--c2:' + pal[1] + '"></div>'
       + '<div class="ch-head">'
       + '<span class="ch-ava">' + avatarHTML({ name: n, colors: pal, isMe: n === S.myChannel.name }, 96) + '</span>'
-      + '<div class="ch-id"><h1 class="ch-name-big">' + esc(n) + '</h1>'
+      + '<div class="ch-id"><h1 class="ch-name-big">' + nameHTML(n) + '</h1>'
       + '<div class="ch-sub">' + fmtNum(subsOfCreator(n)) + ' subscribers · ' + vids.length + ' video' + (vids.length === 1 ? '' : 's') + '</div></div>'
       + subBtnHTML(n)
       + '</div>'
@@ -1653,6 +1653,7 @@
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">announcement shows as a banner on the site</span><button class="pill-btn danger" data-admin="announce-clear">🗑 Remove announcement</button></div>'
       + '<div class="admin-row"><input type="text" id="adminVerifyName" maxlength="50" placeholder="✔ creator name to verify"><button class="pill-btn" data-admin="verify">✔ Verify</button><button class="pill-btn danger" data-admin="unverify">✕ Unverify</button></div>'
       + '<div class="admin-row"><input type="text" id="adminNotifText" maxlength="300" placeholder="🔔 Notification text (from YourVibe ✓)"><button class="pill-btn" data-admin="notify">🔔 Send</button></div>'
+      + '<div class="admin-row"><input type="text" id="adminNotifTo" maxlength="50" placeholder="to account (empty = everyone)"><span class="muted-txt" style="align-self:center;font-size:13px">leave empty = send to all</span></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">clears every notification</span><button class="pill-btn danger" data-admin="notif-clear">🗑 Clear notifications</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">create a poll for the selected video</span><button class="pill-btn" data-admin="poll">📊 Create poll</button></div>'
       + '</div>'
@@ -1715,16 +1716,18 @@
     }
     if (kind === 'notify') {
       const text = ($('#adminNotifText') && $('#adminNotifText').value || '').trim();
+      const to = ($('#adminNotifTo') && $('#adminNotifTo').value || '').trim();
       if (!text) { toast('Enter notification text', '⚠️'); return; }
       try {
         await api('/api/admin/notification', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
-          body: JSON.stringify({ text })
+          body: JSON.stringify({ text, to: to || null })
         });
         await loadVideos();
         toast('Notification sent 🔔', '✅');
         $('#adminNotifText').value = '';
+        $('#adminNotifTo').value = '';
       } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
       return;
     }
