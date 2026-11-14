@@ -2282,7 +2282,7 @@
         await startBroadcast(stream, title, thumb, mime);
         /* P2P host: viewers connect directly to this browser */
         if (window.Peer) {
-          livePeer = new Peer('yourvibe-live-' + liveStreamId);
+          livePeer = new Peer('yourvibe-live-' + liveStreamId, { host: location.hostname, port: location.protocol === 'https:' ? 443 : 80, path: '/peerjs', secure: location.protocol === 'https:' });
           livePeer.on('call', call => { try { call.answer(stream); liveCalls.add(call); call.on('close', () => liveCalls.delete(call)); } catch (e) {} });
           livePeer.on('error', err => { if (err.type !== 'peer-unavailable') console.warn('peer error:', err.type); });
         }
@@ -2370,7 +2370,7 @@
     /* P2P receive: connects straight to the broadcaster (sub-second) */
     async function startP2PView() {
       if (!window.Peer) { statusEl.textContent = 'Live requires a modern browser'; return; }
-      const peer = new Peer();
+      const peer = new Peer({ host: location.hostname, port: location.protocol === 'https:' ? 443 : 80, path: '/peerjs', secure: location.protocol === 'https:' });
       peer.on('open', () => {
         const call = peer.call('yourvibe-live-' + id, null); // receive-only
         call.on('stream', remote => {
