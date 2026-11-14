@@ -2099,11 +2099,45 @@
       + '<label class="rd"><input type="radio" name="liveSrc" value="screen" checked> 🖥️ Screen</label>'
       + '<label class="rd"><input type="radio" name="liveSrc" value="camera"> 📷 Camera</label>'
       + '</div></div>'
+      + '<div class="field"><label>Thumbnail</label>'
+      + '<div class="file-row"><button type="button" class="pill-btn ghost" id="thumbCapBtn">📷 Capture frame</button>'
+      + '<button type="button" class="pill-btn ghost" id="thumbUpBtn">🖼 Upload image</button>'
+      + '<input type="file" id="thumbUpIn" accept="image/*" hidden></div>'
+      + '<div class="thumb-preview hide" id="thumbPreviewWrap"><img id="thumbPreviewBox" style="width:220px;border-radius:10px" alt=""></div>'
+      + '</div>'
       + '<div class="form-err" id="liveErr"></div>'
       + '<button class="btn-neon live-btn" id="liveStart" type="button">🔴 Go Live</button>'
       + '</form></div></div>';
 
+    /* thumbnail state: captured frame or uploaded image */
+    let liveThumb = null;
+    const showThumbPreview = dataUrl => {
+      liveThumb = dataUrl;
+      const prev = document.querySelector('#thumbPreviewWrap');
+      if (prev) { prev.src = dataUrl; prev.parentElement.classList.remove('hide'); }
+    };
+
+    $('#thumbCapBtn').onclick = async () => {
+      const pv = $('#livePrev');
+      if (!pv || !pv.srcObject) { toast('Start the preview first — pick screen or camera', '📷'); return; }
+      try {
+        const cv = document.createElement('canvas');
+        cv.width = 640; cv.height = 360;
+        cv.getContext('2d').drawImage(pv, 0, 0, 640, 360);
+        showThumbPreview(cv.toDataURL('image/jpeg', 0.8));
+        toast('Thumbnail captured 📷', '✅');
+      } catch (e) { toast('Capture failed', '⚠️'); }
+    };
+    $('#thumbUpBtn').onclick = () => $('#thumbUpIn').click();
+    $('#thumbUpIn').onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      try { showThumbPreview(await imageToDataURL(f, 640, 360)); toast('Thumbnail set 🖼️', '✅'); } catch (err) { toast('Could not read image', '⚠️'); }
+    };
+
     $('#liveStart').onclick = async () => {
+      const btn = $('#liveStart');
+      if (btn.disabled) return;
+      btn.disabled = true; btn.textContent = '⏳ Starting…';
       const src = document.querySelector('input[name="liveSrc"]:checked').value;
       $('#liveErr').textContent = '';
       let stream;
@@ -2112,32 +2146,45 @@
           : await navigator.mediaDevices.getUserMedia({ video: { width: 1280 }, audio: true });
       } catch (e) {
         $('#liveErr').textContent = '⚠️ ' + (e.name === 'NotAllowedError' ? 'permission denied' : e.message);
+        btn.disabled = false; btn.textContent = '🔴 Go Live';
         return;
       }
       const title = ($('#liveTitle').value || '').trim() || (myName() + ' is live');
-      /* capture a thumbnail frame from the preview */
-      let thumb = null;
-      try {
-        const pv = $('#livePrev');
-        const cv = document.createElement('canvas');
-        cv.width = 640; cv.height = 360;
-        cv.getContext('2d').drawImage(pv, 0, 0, 640, 360);
-        thumb = cv.toDataURL('image/jpeg', 0.8);
-      } catch (e) {}
+
+      /* connect preview FIRST, wait for a frame, then capture the thumbnail */
+      const pv = $('#livePrev'); pv.srcObject = stream;
+      if (!liveThumb) {
+        await new Promise(r => setTimeout(r, 800));
+        try {
+          const cv = document.createElement('canvas');
+          cv.width = 640; cv.height = 360;
+          cv.getContext('2d').drawImage(pv, 0, 0, 640, 360);
+          liveThumb = cv.toDataURL('image/jpeg', 0.8);
+        } catch (e) {}
+      }
+
       let id;
       try {
-        const r = await api('/api/live/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, thumb }) });
+        const r = await api('/api/live/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, thumb: liveThumb }) });
         id = r.id;
-      } catch (e) { $('#liveErr').textContent = '⚠️ ' + (e.message || 'server error'); stream.getTracks().forEach(tr => tr.stop()); return; }
+      } catch (e) {
+        $('#liveErr').textContent = '⚠️ ' + (e.message || 'server error');
+        stream.getTracks().forEach(tr => tr.stop());
+        btn.disabled = false; btn.textContent = '🔴 Go Live';
+        return;
+      }
       liveStreamId = id; liveChunksSent = 0;
-
-      const pv = $('#livePrev'); pv.srcObject = stream;
       const off = $('#liveOff'); if (off) off.remove();
 
-      const btn = $('#liveStart');
+      /* End stream: stop recording, flush the last segment, then end on the server */
+      let ending = false;
       btn.textContent = '⏹ End stream';
+      btn.disabled = false;
       btn.onclick = async () => {
-        try { liveRecorder && liveRecorder.state !== 'inactive' && liveRecorder.stop(); } catch (e) {}
+        if (ending) return;
+        ending = true;
+        btn.disabled = true; btn.textContent = '⏳ Ending…';
+        try { if (liveRecorder && liveRecorder.state !== 'inactive') { liveRecorder.stop(); await new Promise(r => setTimeout(r, 1500)); } } catch (e) {}
         stream.getTracks().forEach(tr => tr.stop());
         try { await api('/api/live/' + id + '/end', { method: 'POST' }); } catch (e) {}
         toast('Stream ended', '🔴');
