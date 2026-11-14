@@ -2068,6 +2068,8 @@
   });
 
   /* ═══════════ LIVE STREAMING (v2 — broadcast follows you on any page) ═══════════ */
+  let livePeer = null;        // PeerJS host peer
+  let liveCalls = new Set();  // active viewer connections
   let liveRecorder = null;
   let liveStreamId = null;
   let liveChunksSent = 0;
@@ -2159,6 +2161,8 @@
       clearTimeout(killer);
     } catch (e) { /* server auto-ends after 45s without segments */ }
     toast('Stream ended', '🔴');
+    try { if (livePeer) { livePeer.destroy(); } } catch (e) {}
+    livePeer = null; liveCalls.clear();
     liveRecorder = null; liveStreamId = null; liveRawStream = null; UPLOADING = false;
     if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
     removeLiveBar();
@@ -2276,6 +2280,12 @@
 
       try {
         await startBroadcast(stream, title, thumb, mime);
+        /* P2P host: viewers connect directly to this browser */
+        if (window.Peer) {
+          livePeer = new Peer('yourvibe-live-' + liveStreamId);
+          livePeer.on('call', call => { try { call.answer(stream); liveCalls.add(call); call.on('close', () => liveCalls.delete(call)); } catch (e) {} });
+          livePeer.on('error', err => { if (err.type !== 'peer-unavailable') console.warn('peer error:', err.type); });
+        }
       } catch (e) {
         $('#liveErr').textContent = '⚠️ ' + (e.message || 'server error');
         stream.getTracks().forEach(tr => tr.stop());
@@ -2356,30 +2366,30 @@
       } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
     };
 
-    async function nextSeg() {
-      if (ended) { statusEl.textContent = 'Stream ended 🔴'; return; }
-      let pl;
-      try { pl = await api('/api/live/' + id + '/playlist'); } catch (e) { setTimeout(nextSeg, 3000); return; }
-      if (pl.status === 'gone') { statusEl.textContent = 'Stream ended'; return; }
-      ended = pl.status === 'ended';
-      const segs = pl.segs || [];
-      $('#liveTitleEl').textContent = pl.title || '';
-      $('#liveBroadEl').innerHTML = 'by ' + nameHTML(pl.broadcaster);
-      const vw = $('#liveViewers');
-      if (vw) vw.textContent = '👁 ' + (pl.viewers || 0).toLocaleString('en-US') + ' watching';
-      if (segIdx < 0) segIdx = Math.max(0, segs.length - 2); // join at the live edge
-      if (segIdx < segs.length) {
-        const url = segs[segIdx];
-        v.src = url;
-        v.play().catch(() => {});
-        statusEl.textContent = ended ? 'Final moments…' : '🔴 Live — you are watching in real time';
-        v.onended = () => { segIdx++; nextSeg(); };
-      } else {
-        statusEl.textContent = ended ? 'Stream ended 🔴' : 'Reconnecting…';
-        setTimeout(nextSeg, ended ? 4000 : 3000);
-      }
+    /* P2P receive: connects straight to the broadcaster (sub-second) */
+    async function startP2PView() {
+      if (!window.Peer) { statusEl.textContent = 'Live requires a modern browser'; return; }
+      const peer = new Peer();
+      peer.on('open', () => {
+        const call = peer.call('yourvibe-live-' + id, null); // receive-only
+        call.on('stream', remote => {
+          v.srcObject = remote;
+          v.play().catch(() => {});
+          statusEl.textContent = '🔴 Live — watching in real time';
+        });
+        call.on('close', () => { statusEl.textContent = '🔴 Stream ended'; });
+        call.on('error', () => { statusEl.textContent = '🔴 Connection error — retrying…'; setTimeout(startP2PView, 3000); });
+      });
+      peer.on('error', err => {
+        if (err.type === 'peer-unavailable') {
+          /* broadcaster may still be starting — retry */
+          setTimeout(startP2PView, 3000);
+        }
+      });
     }
-    nextSeg();
+
+    async function nextSeg() { /* legacy polling fallback (unused for P2P) */ }
+    startP2PView();
   }
 
   /* ═══════════ router ═══════════ */
