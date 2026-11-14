@@ -1790,6 +1790,7 @@
       + '<div class="admin-row"><input type="text" id="adminColorName" maxlength="50" placeholder="creator name"><select id="adminColorSel"><option value="">no rank</option><option value="bronze">🥉 Bronze</option><option value="silver">🥈 Silver</option><option value="gold">🥇 Gold</option><option value="diamond">💎 Diamond</option><option value="ruby">🔴 Ruby</option></select><button class="pill-btn" data-admin="setcolor">🎨 Set color</button></div>'
       + '<div class="admin-row"><input type="text" id="adminNotifText" maxlength="300" placeholder="🔔 Notification text (from YourVibe ✓)"><button class="pill-btn" data-admin="notify">🔔 Send</button></div>'
       + '<div class="admin-row"><input type="text" id="adminNotifTo" maxlength="50" placeholder="to account (empty = everyone)"><span class="muted-txt" style="align-self:center;font-size:13px">leave empty = send to all</span></div>'
+      + '<div class="admin-row"><input type="number" id="adminChatRate" min="1" max="60" placeholder="sec between comments"><button class="pill-btn" data-admin="chat-on">💬 Chat ON</button><button class="pill-btn danger" data-admin="chat-off">💬 OFF</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">clears every notification</span><button class="pill-btn danger" data-admin="notif-clear">🗑 Clear notifications</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">create a poll for the selected video</span><button class="pill-btn" data-admin="poll">📊 Create poll</button></div>'
       + '</div>'
@@ -1836,6 +1837,19 @@
   }
 
   async function adminAction(kind) {
+    if (kind === 'chat-on' || kind === 'chat-off') {
+      const rate = parseInt($('#adminChatRate') && $('#adminChatRate').value, 10) || 4;
+      const enabled = kind === 'chat-on';
+      try {
+        const r = await api('/api/admin/live/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY },
+          body: JSON.stringify({ enabled, rateSec: enabled ? rate : 4 })
+        });
+        toast(enabled ? 'Fake live chat ON — 1 comment / ' + r.rateSec + 's 💬' : 'Fake live chat OFF', '💬');
+      } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
     if (kind === 'setcolor') {
       const name = ($('#adminColorName') && $('#adminColorName').value || '').trim();
       const color = ($('#adminColorSel') && $('#adminColorSel').value || '').trim();
@@ -2085,9 +2099,6 @@
       + '<label class="rd"><input type="radio" name="liveSrc" value="screen" checked> 🖥️ Screen</label>'
       + '<label class="rd"><input type="radio" name="liveSrc" value="camera"> 📷 Camera</label>'
       + '</div></div>'
-      + '<div class="field"><div class="radio-row">'
-      + '<label class="rd"><input type="checkbox" id="liveAutoChat" checked> 💬 Auto live chat (fake comments)</label>'
-      + '</div></div>'
       + '<div class="form-err" id="liveErr"></div>'
       + '<button class="btn-neon live-btn" id="liveStart" type="button">🔴 Go Live</button>'
       + '</form></div></div>';
@@ -2136,22 +2147,12 @@
       };
 
       let secs = 0;
-      const autoChat = $('#liveAutoChat') && $('#liveAutoChat').checked;
       liveTimer = setInterval(async () => {
         secs++;
         let viewers = '';
         try { const pl = await api('/api/live/' + id + '/playlist'); viewers = ' · 👁 ' + (pl.viewers || 0).toLocaleString('en-US'); } catch (e) {}
         btn.textContent = '⏹ End — ' + Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0') + ' · ' + liveChunksSent + ' segs' + viewers;
       }, 1000);
-      if (autoChat) {
-        const chatPool = ['🔥🔥🔥', 'lets gooo', 'first!!', 'POGGERS', 'W stream', 'hello from Germany 🇩🇪', 'how long will you stream?', '🎉🎉', 'BEST STREAMER', 'hi bro', '🔥', 'from Ukraine 🇺🇦 ❤️', 'GG', 'the king is live 👑', 'chat is this real', 'yo!!', 'play roblox please', ' Lol ', 'nice one', '😍😍'];
-        const chatPool2 = ['NeonFox', 'CyberWolf', 'PixelCat', 'TurboBanana', 'DarkGamer', 'MoonBoy', 'LuckyPlayer', 'RobloxKing', 'StreamFan_1', 'ProGamer_77'];
-        liveTimer = setInterval(async () => {
-          const author = chatPool2[Math.floor(Math.random() * chatPool2.length)] + Math.floor(Math.random() * 99);
-          const text = chatPool[Math.floor(Math.random() * chatPool.length)];
-          try { await api('/api/videos/' + id + '/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ author, text }) }); } catch (e) {}
-        }, 2500 + Math.random() * 2500);
-      }
 
       liveRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000 });
       liveRecorder.ondataavailable = async e => {
