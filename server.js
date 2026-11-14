@@ -30,6 +30,7 @@ const https = require('https');
    instances have no IPv6 egress — force IPv4. */
 try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
 
+const { ExpressPeerServer } = require('peer');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -1661,4 +1662,9 @@ setInterval(() => {
 app.use(express.static(__dirname));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
-app.listen(PORT, () => console.log('⚡ YourVibe API on port ' + PORT));
+/* PeerJS signaling server (websockets) mounted on the same service */
+const httpServer = require('http').createServer(app);
+const peerServer = ExpressPeerServer(httpServer, { debug: false });
+app.use('/peerjs', peerServer);
+
+httpServer.listen(PORT, () => console.log('⚡ YourVibe API on port ' + PORT));
