@@ -721,10 +721,20 @@
       /* minimal controls used by both paths */
       const bindMini = () => {
         const pb = $('#yvPlayB'), fb = $('#yvFull'), P = $('#yvPlayer');
+        const seek = $('#yvSeek'), fill = $('#yvFill');
         if (pb) pb.onclick = () => { if (nv.paused) nv.play().catch(() => {}); else nv.pause(); };
         nv.addEventListener('play', () => { if (pb) pb.textContent = '⏸'; });
         nv.addEventListener('pause', () => { if (pb) pb.textContent = '▶'; });
         if (fb && P) fb.onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else if (P.requestFullscreen) P.requestFullscreen().catch(() => {}); };
+        /* seek bar works once MSE finalizes the duration (endOfStream) */
+        if (seek) seek.onclick = e => {
+          if (!isFinite(nv.duration) || !nv.duration) return;
+          const r = seek.getBoundingClientRect();
+          nv.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * nv.duration;
+        };
+        nv.addEventListener('timeupdate', () => {
+          if (seek && fill && isFinite(nv.duration) && nv.duration) fill.style.width = (nv.currentTime / nv.duration * 100) + '%';
+        });
       };
       bindMini();
 
@@ -745,7 +755,6 @@
               if (!fetching && qi >= segs.length) {
                 try { if (ms.readyState === 'open') ms.endOfStream(); } catch (e) {}
                 if (segLabel) segLabel.textContent = 'VOD · ' + segs.length + ' parts';
-                initPlayer(); // duration is finite now → seek bar works
               }
               return;
             }
