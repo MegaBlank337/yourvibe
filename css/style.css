@@ -1033,6 +1033,23 @@ body.has-ann main { padding-top: 138px; }
   border-bottom: 1px solid var(--line);
   color: var(--cyan);
 }
+/* help chat panel */
+.help-panel { right: 62px; display: flex; flex-direction: column; padding: 0; overflow: hidden; max-height: min(480px, 70vh); }
+.help-panel .notif-head { flex: 0 0 auto; }
+.help-list { flex: 1 1 auto; overflow-y: auto; min-height: 200px; padding: 6px 0; }
+.help-msg { padding: 9px 16px; border-bottom: 1px solid rgba(255,255,255,.04); }
+.help-msg:last-child { border-bottom: none; }
+.help-msg.admin .help-who { color: var(--cyan); }
+.help-msg.me .help-who { color: rgba(255,255,255,.55); }
+.help-msg.me .help-txt { color: rgba(255,255,255,.92); }
+.help-who { font-weight: 700; font-size: 12px; margin-bottom: 3px; display: flex; align-items: center; gap: 6px; }
+.help-txt { font-size: 14px; line-height: 1.45; word-break: break-word; }
+.help-time { font-size: 11px; color: rgba(255,255,255,.35); margin-top: 3px; }
+.help-input { flex: 0 0 auto; display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
+.help-input input { flex: 1; }
+.adm-sup-list { max-height: 220px; overflow-y: auto; background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.adm-sup { padding: 4px 2px; font-size: 13px; line-height: 1.5; border-bottom: 1px dashed rgba(255,255,255,.06); }
+.adm-sup:last-child { border-bottom: none; }
 .notif-item { padding: 13px 16px; border-bottom: 1px solid var(--line); }
 .notif-item:last-child { border-bottom: none; }
 .notif-sender { font-weight: 700; font-size: 14px; color: var(--cyan); margin-bottom: 5px; }
