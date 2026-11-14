@@ -662,6 +662,17 @@ app.post('/api/auth/profile', async (req, res) => {
     }
     if (b.color !== undefined) {
       const color = String(b.color || '').slice(0, 20);
+      /* rank requirements: enforced server-side (admin-boosted subs count) */
+      const THRESHOLDS = { bronze: 10000, silver: 100000, gold: 1000000, diamond: 10000000, ruby: 100000000 };
+      if (color) {
+        const need = THRESHOLDS[color] || 0;
+        let subs = 0;
+        try {
+          const cr = await q('select coalesce(subs, 0) as subs from creators where name = $1', [username]);
+          if (cr.rows.length) subs = num(cr.rows[0].subs);
+        } catch (e) {}
+        if (subs < need) return res.status(403).json({ error: 'This rank needs ' + need.toLocaleString('en-US') + ' subscribers — you have ' + subs.toLocaleString('en-US') });
+      }
       try {
         await q('update creators set color = $2 where name = $1', [username, color || null]);
         out.color = color || null;
@@ -1329,6 +1340,19 @@ app.get('/api/thumb/:id', async (req, res) => {
 });
 
 /* ── ADMIN (panel opens with F4 in the app) ── */
+
+
+app.post('/api/admin/creator/color', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const name = String((req.body && req.body.name) || '').trim().slice(0, 50);
+    const color = String((req.body && req.body.color) || '').trim().toLowerCase().slice(0, 20) || null;
+    if (!name) return res.status(400).json({ error: 'missing name' });
+    if (color && !['bronze', 'silver', 'gold', 'diamond', 'ruby'].includes(color)) return res.status(400).json({ error: 'bad color' });
+    await q('insert into creators (name, subs, color) values ($1, 0, $2) on conflict (name) do update set color = $2', [name, color]);
+    res.json({ ok: true, name, color });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
 
 app.post('/api/admin/creator/verify', async (req, res) => {
   try {
