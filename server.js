@@ -1158,16 +1158,16 @@ app.get('/api/videos/:id/playurl', async (req, res) => {
       if (info.length) dur = Math.floor(info.length / 60) + ':' + String(Math.floor(info.length % 60)).padStart(2, '0');
     }
     if (host) {
-      const play = 'https://' + host + '/' + row.bunny_guid + '/play_' + bestRendition(info ? info.availableResolutions : '') + '.mp4';
-      const hls = 'https://' + host + '/' + row.bunny_guid + '/playlist.m3u8';
-      const thumb = row.thumb_url || ('https://' + host + '/' + row.bunny_guid + '/thumbnail.jpg');
+      const play = 'https://' + host + '/' + bg + '/play_' + bestRendition(info ? info.availableResolutions : '') + '.mp4';
+      const hls = 'https://' + host + '/' + bg + '/playlist.m3u8';
+      const thumb = row.thumb_url || ('https://' + host + '/' + bg + '/thumbnail.jpg');
       const durFinal = dur || null;
       await q('update videos set video_url = $2, thumb_url = $3, duration = coalesce($4, duration) where id = $1', [req.params.id, play, thumb, durFinal]);
       metaCache.delete(req.params.id);
-      return res.json({ play, hls, thumb });
+      return res.json({ play, hls, thumb, progress: 100 });
     }
-    /* still encoding — return the iframe so the page can poll again */
-    return res.json({ processing: true, play: row.video_url, thumb: row.thumb_url });
+    /* still encoding — report real progress so the page shows a % */
+    return res.json({ processing: true, progress: info ? Math.round(info.encodeProgress || 0) : 0, play: row.video_url, thumb: row.thumb_url });
   } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
 
