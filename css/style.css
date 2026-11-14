@@ -1109,6 +1109,24 @@ body.has-ann main { padding-top: 138px; }
 .live-off { color: var(--mut); font-weight: 600; }
 .live-btn { animation: livePulse 2s ease-in-out infinite; }
 .live-view-page { max-width: 1100px; margin: 0 auto; }
+.stream-badge {
+  position: absolute; left: 8px; top: 8px; z-index: 2;
+  padding: 3px 9px; border-radius: 8px;
+  font-family: 'Orbitron', sans-serif; font-size: 10px; letter-spacing: 1.2px; font-weight: 700;
+  background: rgba(5, 8, 20, .88); border: 1px solid rgba(255, 90, 120, .6); color: #ff5a78;
+}
+.stream-badge.live {
+  background: rgba(255, 43, 94, .85); border-color: rgba(255, 43, 94, .9);
+  color: #fff; box-shadow: 0 0 14px rgba(255, 43, 94, .5);
+}
+.stream-card .sc-meta { padding: 8px 4px 0; }
+.stream-card .sc-meta h3 { font-size: 14.5px; margin: 0 0 4px; }
+.tab-count {
+  display: inline-grid; place-items: center; min-width: 18px; height: 18px;
+  padding: 0 5px; margin-left: 5px; border-radius: 99px;
+  background: rgba(255, 43, 94, .18); border: 1px solid rgba(255, 90, 120, .5);
+  color: #ff5a78; font-size: 11px;
+}
 .live-over {
   position: absolute; inset: 0; display: grid; place-items: center;
   background: rgba(5, 8, 20, .84); backdrop-filter: blur(4px);
