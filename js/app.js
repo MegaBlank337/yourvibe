@@ -319,6 +319,11 @@
       + '</div>';
   }
 
+  function parseSizes(x) {
+    if (Array.isArray(x)) return x;
+    try { const p = JSON.parse(typeof x === 'string' && x ? x : '[]'); return Array.isArray(p) ? p : []; } catch (e) { return []; }
+  }
+
   function watchHref(v) { return (v.store === 'live' && Number(v.parts) === 0) ? '#/live/' + v.id : '#/watch/' + v.id; }
 
   function cardHTML(v) {
@@ -672,9 +677,7 @@
 
     /* ended live stream (VOD): sequential webm segments, full comments/likes UI */
     if (v.store === 'live') {
-      let segs = [];
-      try { segs = JSON.parse(v.sizes || '[]'); } catch (e) {}
-      if (!Array.isArray(segs)) segs = [];
+      const segs = parseSizes(v.sizes);
       /* not finalized yet — if the stream is still LIVE, jump to the live page */
       if (!segs.length) {
         try {
