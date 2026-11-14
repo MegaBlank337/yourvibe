@@ -618,7 +618,7 @@ main > * { animation: fadeUp .38s ease both; }
   flex-wrap: wrap;
 }
 .ch-ava .av, .ch-ava .av-img {
-  box-shadow: 0 0 0 4px var(--bg0), 0 0 0 6px rgba(255, 43, 214, .55), 0 0 26px rgba(255, 43, 214, .35);
+  box-shadow: 0 0 0 4px var(--bg0), 0 0 0 6px var(--rank, rgba(255, 43, 214, .55)), 0 0 26px var(--rank, rgba(255, 43, 214, .35));
 }
 .ch-id { flex: 1; min-width: 220px; }
 .ch-name-big { font-family: 'Orbitron', sans-serif; font-size: 27px; letter-spacing: 1px; text-shadow: 0 0 16px rgba(0, 229, 255, .4); }
