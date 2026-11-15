@@ -391,8 +391,8 @@ main > * { animation: fadeUp .38s ease both; }
   padding: 10px 110px 10px 30px;
 }
 .short-left {
-  position: absolute; left: 30px; bottom: 34px;
-  max-width: 300px; min-width: 200px;
+  position: absolute; left: -324px; bottom: 0;
+  width: 300px;
   display: flex; flex-direction: column; align-items: flex-start; gap: 11px;
   z-index: 4;
 }
@@ -420,11 +420,15 @@ main > * { animation: fadeUp .38s ease both; }
 .sl-sound span { overflow: hidden; text-overflow: ellipsis; }
 .sl-sound:hover { border-color: rgba(0, 229, 255, .55); box-shadow: 0 0 12px rgba(0, 229, 255, .2); }
 
-.short-frame {
+.short-stage {
   position: relative;
   height: min(calc(100vh - 130px), 820px);
   max-width: 46vw;
   aspect-ratio: 9 / 16;
+  flex: 0 0 auto;
+}
+.short-frame {
+  position: absolute; inset: 0;
   border-radius: 18px;
   overflow: hidden;
   background: #000;
@@ -436,6 +440,7 @@ main > * { animation: fadeUp .38s ease both; }
   object-fit: cover;
   background: #000;
 }
+.short-stage .v-spin { position: absolute; }
 .short-frame .short-hint {
   position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
   font-family: 'Orbitron', sans-serif; font-size: 10px; letter-spacing: 2px;
@@ -445,7 +450,7 @@ main > * { animation: fadeUp .38s ease both; }
 
 /* action rail — OUTSIDE the video, to the right, like YouTube Shorts */
 .short-rail {
-  position: absolute; right: 104px; bottom: 34px;
+  position: absolute; right: -96px; bottom: 0;
   display: flex; flex-direction: column; align-items: center; gap: 18px;
   z-index: 4;
 }
@@ -490,12 +495,12 @@ main > * { animation: fadeUp .38s ease both; }
 @media (max-width: 900px) {
   .short { padding: 10px 14px; }
   .short-left { display: none; }
-  .short-frame { height: min(calc(100vh - 80px), 640px); max-width: 92vw; }
+  .short-stage { height: min(calc(100vh - 80px), 640px); max-width: 92vw; }
   .short-rail {
-    position: absolute;
-    right: calc(50% - min(215px, 47vw));
-    bottom: 9%;
+    right: 10px;
+    bottom: 12px;
   }
+  .short-rail .rail-lbl { color: #fff; text-shadow: 0 1px 6px #000; }
   .rail-lbl { color: #fff; text-shadow: 0 1px 6px #000; }
   .shorts-nav { right: 10px; }
 }
