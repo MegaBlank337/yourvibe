@@ -443,23 +443,55 @@
 
     main.innerHTML = '<div class="shorts-feed">' + shorts.map(s => {
       const up = upOf(s);
+      const liveNow = false;
       return '<section class="short" data-short="' + s.id + '">'
+        + '<div class="short-left">'
+        + '<div class="sl-cat">' + (s.category ? '🎮 ' + esc(s.category) : '⚡ Short') + '</div>'
+        + '<a class="sl-user" href="#/c/' + encodeURIComponent(s.uploader) + '">' + avatarHTML(up, 42)
+        + '<b>@' + esc(s.uploader) + '</b></a>'
+        + subBtnHTML(s.uploader, true)
+        + '<div class="short-title">' + esc(s.title) + '</div>'
+        + '<a class="sl-sound" href="#/watch/' + s.id + '">▶ <span>original sound — ' + esc(s.uploader) + '</span></a>'
+        + '</div>'
+        + '<div class="short-frame">'
         + '<video loop muted playsinline preload="metadata"' + (s.thumb_url ? ' poster="' + s.thumb_url + '"' : '') + ' src="' + srcOf(s) + '"></video>'
         + '<div class="v-spin v-spin-s"><i></i></div>'
-        + '<div class="short-panel">'
-        + '<div class="short-info">' + avatarHTML(up, 34)
-        + '<div class="si-txt"><b>' + esc(s.uploader) + '</b></div>' + subBtnHTML(s.uploader, true) + '</div>'
-        + '<div class="short-title">' + esc(s.title) + '</div>'
+        + '<div class="short-hint">Tap to pause</div>'
         + '</div>'
         + '<div class="short-rail">'
-        + '<button class="rail-btn' + (isLiked(s.id) ? ' on' : '') + '" data-action="like" data-id="' + s.id + '"><span class="ric">❤️</span><span class="cnt">' + fmtNum(likesOf(s)) + '</span></button>'
-        + '<a class="rail-btn" href="#/watch/' + s.id + '" title="Comments"><span class="ric">💬</span><span class="cnt">💬</span></a>'
-        + '<button class="rail-btn" data-action="share" data-id="' + s.id + '"><span class="ric">🔗</span><span>Share</span></button>'
-        + '<button class="rail-btn mute-btn" data-action="mute-shorts"><span class="ric">' + (shortsMuted ? '🔇' : '🔊') + '</span><span>Sound</span></button>'
+        + '<div class="rail-item"><button class="rail-btn' + (isLiked(s.id) ? ' on' : '') + '" data-action="like" data-id="' + s.id + '"><span class="ric">' + (isLiked(s.id) ? '❤️' : '🤍') + '</span></button><span class="rail-lbl">' + fmtNum(likesOf(s)) + '</span></div>'
+        + '<div class="rail-item"><a class="rail-btn" href="#/watch/' + s.id + '" title="Comments"><span class="ric">💬</span></a><span class="rail-lbl rail-cnt-c" data-vid="' + s.id + '">…</span></div>'
+        + '<div class="rail-item"><button class="rail-btn" data-action="share" data-id="' + s.id + '"><span class="ric">🔗</span></button><span class="rail-lbl">Share</span></div>'
+        + '<div class="rail-item"><button class="rail-btn mute-btn" data-action="mute-shorts"><span class="ric">' + (shortsMuted ? '🔇' : '🔊') + '</span></button><span class="rail-lbl">Sound</span></div>'
         + '</div>'
-        + '<div class="short-hint">Tap to pause</div>'
         + '</section>';
-    }).join('') + '</div>';
+    }).join('') + '</div>'
+      + '<div class="shorts-nav"><button id="shPrev" title="Previous">↑</button><button id="shNext" title="Next">↓</button></div>';
+
+    /* real comment counters */
+    document.querySelectorAll('.rail-cnt-c').forEach(async el => {
+      try { const list = await api('/api/videos/' + el.dataset.vid + '/comments'); el.textContent = String((list || []).length); }
+      catch (e) { el.textContent = '💬'; }
+    });
+    /* ↑↓ navigation */
+    const feedEl = document.querySelector('.shorts-feed');
+    const secEls = Array.from(document.querySelectorAll('.shorts-feed .short'));
+    const shStep = dir => {
+      if (!feedEl || !secEls.length) return;
+      const cur = Math.round(feedEl.scrollTop / Math.max(1, feedEl.clientHeight));
+      const idx = Math.max(0, Math.min(secEls.length - 1, cur + dir));
+      secEls[idx].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    const prevB = document.getElementById('shPrev');
+    const nextB = document.getElementById('shNext');
+    if (prevB) prevB.onclick = () => shStep(-1);
+    if (nextB) nextB.onclick = () => shStep(1);
+    const shKeys = e => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); shStep(1); }
+      if (e.key === 'ArrowUp') { e.preventDefault(); shStep(-1); }
+    };
+    document.addEventListener('keydown', shKeys);
+    cleanups.push(() => document.removeEventListener('keydown', shKeys));
 
     const io = new IntersectionObserver(es => es.forEach(en => {
       const vid = en.target;
