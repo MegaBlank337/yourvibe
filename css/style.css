@@ -1074,6 +1074,8 @@ body.has-ann main { padding-top: 138px; }
 .adm-sup { padding: 4px 2px; font-size: 13px; line-height: 1.5; border-bottom: 1px dashed rgba(255,255,255,.06); }
 .adm-sup:last-child { border-bottom: none; }
 .adm-tickets { display: flex; flex-direction: column; gap: 6px; }
+.adm-notif { display: flex; align-items: center; gap: 8px; padding: 5px 2px; font-size: 13px; line-height: 1.4; border-bottom: 1px dashed rgba(255,255,255,.06); }
+.adm-notif:last-child { border-bottom: none; }
 .adm-ticket {
   display: flex; align-items: center; gap: 8px; width: 100%;
   text-align: left; background: rgba(10, 12, 28, .85);
