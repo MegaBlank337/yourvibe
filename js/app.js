@@ -445,6 +445,7 @@
       const up = upOf(s);
       const liveNow = false;
       return '<section class="short" data-short="' + s.id + '">'
+        + '<div class="short-stage">'
         + '<div class="short-left">'
         + '<div class="sl-cat">' + (s.category ? '🎮 ' + esc(s.category) : '⚡ Short') + '</div>'
         + '<a class="sl-user" href="#/c/' + encodeURIComponent(s.uploader) + '">' + avatarHTML(up, 42)
@@ -463,6 +464,7 @@
         + '<div class="rail-item"><a class="rail-btn" href="#/watch/' + s.id + '" title="Comments"><span class="ric">💬</span></a><span class="rail-lbl rail-cnt-c" data-vid="' + s.id + '">…</span></div>'
         + '<div class="rail-item"><button class="rail-btn" data-action="share" data-id="' + s.id + '"><span class="ric">🔗</span></button><span class="rail-lbl">Share</span></div>'
         + '<div class="rail-item"><button class="rail-btn mute-btn" data-action="mute-shorts"><span class="ric">' + (shortsMuted ? '🔇' : '🔊') + '</span></button><span class="rail-lbl">Sound</span></div>'
+        + '</div>'
         + '</div>'
         + '</section>';
     }).join('') + '</div>'
