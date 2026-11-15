@@ -375,56 +375,90 @@ main > * { animation: fadeUp .38s ease both; }
 .short-card h4 { font-size: 14px; font-weight: 600; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* ══════════ SHORTS FEED ══════════ */
+/* ══════════ SHORTS — YouTube-style desktop player ══════════ */
 .shorts-feed {
   height: calc(100vh - 64px);
   overflow-y: auto; scroll-snap-type: y mandatory;
   margin: -60px -28px -90px;
+  scrollbar-width: none;
 }
+.shorts-feed::-webkit-scrollbar { display: none; }
 .short {
   height: 100%;
   scroll-snap-align: start; scroll-snap-stop: always;
   display: flex; align-items: center; justify-content: center;
-  position: relative;
-  padding: 10px;
+  gap: 22px;
+  padding: 10px 110px 10px 30px;
 }
-.short video {
-  height: 100%; max-width: min(430px, 94vw);
-  object-fit: cover;
+.short-left {
+  max-width: 300px; min-width: 200px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 11px;
+  align-self: center;
+  margin-top: 14%;
+}
+.sl-cat { font-size: 13px; color: rgba(232, 236, 255, .55); font-weight: 600; letter-spacing: .3px; }
+.sl-user {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 15.5px; font-weight: 700; color: var(--txt);
+  text-decoration: none;
+}
+.sl-user:hover b { color: var(--cyan); }
+.short-left .short-title {
+  font-size: 16px; font-weight: 600; line-height: 1.35;
+  text-shadow: none;
+  max-height: 4.1em; overflow: hidden;
+}
+.sl-sound {
+  display: inline-flex; align-items: center; gap: 8px;
+  max-width: 260px;
+  padding: 7px 14px; border-radius: 999px;
+  background: rgba(8, 10, 24, .8);
+  border: 1px solid var(--line);
+  font-size: 12.5px; color: var(--txt); text-decoration: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sl-sound span { overflow: hidden; text-overflow: ellipsis; }
+.sl-sound:hover { border-color: rgba(0, 229, 255, .55); box-shadow: 0 0 12px rgba(0, 229, 255, .2); }
+
+.short-frame {
+  position: relative;
+  height: min(100%, 780px);
+  aspect-ratio: 9 / 16;
   border-radius: 18px;
-  border: 1px solid rgba(0, 229, 255, .3);
-  box-shadow: 0 0 46px rgba(139, 92, 246, .28), 0 18px 40px rgba(0, 0, 0, .55);
+  overflow: hidden;
+  background: #000;
+  flex: 0 0 auto;
+  box-shadow: 0 0 46px rgba(139, 92, 246, .28), 0 0 24px rgba(0, 229, 255, .18), 0 18px 40px rgba(0, 0, 0, .55);
+}
+.short-frame video {
+  width: 100%; height: 100%;
+  object-fit: cover;
   background: #000;
 }
-
-.short-panel {
-  position: absolute; left: 50%; transform: translateX(-50%);
-  bottom: 8%; width: min(402px, 88vw);
-  display: flex; flex-direction: column; gap: 10px;
-  pointer-events: none;
-}
-.short-info { display: flex; align-items: center; gap: 10px; pointer-events: auto; }
-.si-txt { font-size: 14.5px; flex: 1; text-shadow: 0 1px 6px #000; }
-.short-title {
-  font-size: 16.5px; font-weight: 600; line-height: 1.3;
-  text-shadow: 0 1px 8px #000, 0 0 18px rgba(0, 229, 255, .35);
+.short-frame .short-hint {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+  font-family: 'Orbitron', sans-serif; font-size: 10px; letter-spacing: 2px;
+  color: rgba(232, 236, 255, .55); text-shadow: 0 0 10px #000;
+  z-index: 3;
 }
 
+/* action rail — OUTSIDE the video, to the right, like YouTube Shorts */
 .short-rail {
-  position: absolute; right: calc(50% - min(215px, 47vw));
-  bottom: 9%;
-  display: flex; flex-direction: column; gap: 16px;
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
+  margin-top: 20%;
 }
+.rail-item { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.rail-lbl { font-size: 12.5px; font-weight: 600; color: rgba(232, 236, 255, .78); text-align: center; max-width: 74px; }
 .rail-btn {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   color: var(--txt); font-size: 12.5px; font-weight: 600;
-  text-shadow: 0 1px 6px #000;
   transition: transform .15s;
 }
-.rail-btn:hover { transform: scale(1.12); }
+.rail-btn:hover { transform: scale(1.1); }
 .rail-btn .ric {
-  width: 46px; height: 46px; display: grid; place-items: center;
-  font-size: 19px; border-radius: 50%;
-  background: rgba(8, 10, 24, .75);
+  width: 52px; height: 52px; display: grid; place-items: center;
+  font-size: 21px; border-radius: 50%;
+  background: rgba(8, 10, 24, .85);
   border: 1px solid rgba(255, 255, 255, .18);
   backdrop-filter: blur(6px);
 }
@@ -434,10 +468,35 @@ main > * { animation: fadeUp .38s ease both; }
   animation: pulseGlow 2s infinite;
 }
 
-.short-hint {
-  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
-  font-family: 'Orbitron', sans-serif; font-size: 10px; letter-spacing: 2px;
-  color: rgba(232, 236, 255, .55); text-shadow: 0 0 10px #000;
+/* ↑↓ navigation arrows — fixed at the right edge */
+.shorts-nav {
+  position: fixed; right: 30px; top: 50%; transform: translateY(-50%);
+  display: flex; flex-direction: column; gap: 14px;
+  z-index: 45;
+}
+.shorts-nav button {
+  width: 48px; height: 48px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 20px; color: var(--txt);
+  background: rgba(8, 10, 24, .85);
+  border: 1px solid rgba(255, 255, 255, .18);
+  backdrop-filter: blur(6px);
+  transition: all .15s;
+}
+.shorts-nav button:hover { border-color: rgba(0, 229, 255, .55); box-shadow: 0 0 14px rgba(0, 229, 255, .25); transform: scale(1.08); }
+
+@media (max-width: 900px) {
+  .short { padding: 10px 14px; gap: 12px; }
+  .short-left { display: none; }
+  .short-frame { height: min(88%, 640px); }
+  .short-rail {
+    position: absolute;
+    right: calc(50% - min(215px, 47vw));
+    bottom: 9%;
+    margin-top: 0;
+  }
+  .rail-lbl { color: #fff; text-shadow: 0 1px 6px #000; }
+  .shorts-nav { right: 10px; }
 }
 
 /* ══════════ SUBSCRIPTIONS ══════════ */
