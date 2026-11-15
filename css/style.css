@@ -393,8 +393,8 @@ main > * { animation: fadeUp .38s ease both; }
 .short-left {
   max-width: 300px; min-width: 200px;
   display: flex; flex-direction: column; align-items: flex-start; gap: 11px;
-  align-self: center;
-  margin-top: 14%;
+  align-self: flex-end;
+  padding-bottom: 30px;
 }
 .sl-cat { font-size: 13px; color: rgba(232, 236, 255, .55); font-weight: 600; letter-spacing: .3px; }
 .sl-user {
@@ -422,7 +422,7 @@ main > * { animation: fadeUp .38s ease both; }
 
 .short-frame {
   position: relative;
-  height: min(100%, 780px);
+  height: calc(100% - 16px);
   aspect-ratio: 9 / 16;
   border-radius: 18px;
   overflow: hidden;
@@ -445,7 +445,8 @@ main > * { animation: fadeUp .38s ease both; }
 /* action rail — OUTSIDE the video, to the right, like YouTube Shorts */
 .short-rail {
   display: flex; flex-direction: column; align-items: center; gap: 18px;
-  margin-top: 20%;
+  align-self: flex-end;
+  padding-bottom: 30px;
 }
 .rail-item { display: flex; flex-direction: column; align-items: center; gap: 5px; }
 .rail-lbl { font-size: 12.5px; font-weight: 600; color: rgba(232, 236, 255, .78); text-align: center; max-width: 74px; }
@@ -488,13 +489,14 @@ main > * { animation: fadeUp .38s ease both; }
 @media (max-width: 900px) {
   .short { padding: 10px 14px; gap: 12px; }
   .short-left { display: none; }
-  .short-frame { height: min(88%, 640px); }
+  .short-frame { height: calc(100% - 10px); }
   .short-rail {
     position: absolute;
     right: calc(50% - min(215px, 47vw));
     bottom: 9%;
-    margin-top: 0;
+    padding-bottom: 0;
   }
+  .short-left { padding-bottom: 0; }
   .rail-lbl { color: #fff; text-shadow: 0 1px 6px #000; }
   .shorts-nav { right: 10px; }
 }
