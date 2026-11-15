@@ -1158,7 +1158,7 @@ app.delete('/api/videos/:id', async (req, res) => {
     const row = r.rows[0];
     /* owner = matching delete key OR logged-in account that uploaded it */
     const authName = await authUser(req);
-    const owner = (key && key === row.del_key) || (authName && authName === row.uploader);
+    const owner = (key && key === row.del_key) || (authName && authName === row.uploader) || req.get('x-admin-key') === ADMIN_KEY;
     if (!owner) return res.status(403).json({ error: 'not your video' });
     metaCache.delete(req.params.id);
     await q('delete from videos where id = $1', [req.params.id]); // cascades comments
@@ -1179,6 +1179,11 @@ app.delete('/api/videos/:id', async (req, res) => {
         await ghApi(`/repos/${GH_REPO}/releases/${rid}`, { method: 'DELETE' }).catch(() => {});
       }
       await ghApi(`/repos/${GH_REPO}/git/refs/tags/${tag}`, { method: 'DELETE' }).catch(() => {});
+    } else if (row.store === 'live') {
+      const parts = Math.max(1, Number(row.parts) || 1);
+      for (let i = 0; i < parts; i++) {
+        await sbDelete('live/' + req.params.id + '/' + i + '.webm').catch(() => {});
+      }
     } else {
       const parts = Math.max(1, Number(row.parts) || 1);
       for (let i = 0; i < parts; i++) {
@@ -1416,6 +1421,25 @@ app.post('/api/admin/notification', async (req, res) => {
     if (!text) return res.status(400).json({ error: 'empty notification' });
     const r = await q('insert into notifications (text, target) values ($1, $2) returning id, text, target, created_at', [text, target]);
     res.status(201).json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.get('/api/admin/notifications', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const r = await q('select id, text, target, created_at from notifications order by id desc limit 50');
+    res.json(r.rows);
+  } catch (e) { res.json([]); }
+});
+
+/* delete ONE notification */
+app.delete('/api/admin/notification/one', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const id = parseInt((req.body && req.body.id) || '0', 10);
+    if (!id) return res.status(400).json({ error: 'missing id' });
+    await q('delete from notifications where id = $1', [id]);
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
 
