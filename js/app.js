@@ -1951,6 +1951,7 @@
       + '<div class="admin-row"><input type="number" id="adminN_comments" value="100" min="1" max="500"><button class="pill-btn" data-admin="comments">💬 + Random comments</button></div>'
       + '<div class="admin-row"><input type="number" id="adminN_commentsru" value="100" min="1" max="500"><button class="pill-btn" data-admin="commentsru">🇷🇺 + Комменты (RU)</button></div>'
       + '<div class="admin-row"><input type="text" id="adminTransferTo" maxlength="50" placeholder="account / creator name"><button class="pill-btn" data-admin="transfer">📦 Transfer video to name</button></div>'
+      + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">deletes the selected video or stream — files cleaned too</span><button class="pill-btn danger" data-admin="del-video">🗑 Delete video / stream</button></div>'
       + '<div class="admin-row"><input type="text" id="adminAnnText" maxlength="300" placeholder="📣 Announcement text (everyone sees it)"><button class="pill-btn" data-admin="announce">📣 Post</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">announcement shows as a banner on the site</span><button class="pill-btn danger" data-admin="announce-clear">🗑 Remove announcement</button></div>'
       + '<div class="admin-row"><input type="text" id="adminVerifyName" maxlength="50" placeholder="✔ creator name to verify"><button class="pill-btn" data-admin="verify">✔ Verify</button><button class="pill-btn danger" data-admin="unverify">✕ Unverify</button></div>'
@@ -1961,6 +1962,8 @@
       + '<div class="admin-row"><input type="number" id="adminViewersN" value="500" min="1" max="100000"><button class="pill-btn" data-admin="live-viewers-plus">👁 + Зрители</button><button class="pill-btn danger" data-admin="live-viewers-minus">👁 − Зрители</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">± viewers on the CURRENT live stream</span></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">clears every notification</span><button class="pill-btn danger" data-admin="notif-clear">🗑 Clear notifications</button></div>'
+      + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">delete notifications one by one</span><button class="pill-btn" data-admin="notif-list">🔔 Notifications list</button></div>'
+      + '<div class="admin-row" style="flex-direction:column;align-items:stretch"><div id="adminNotifList" class="adm-sup-list"><span class="muted-txt">Click “Notifications list” to load…</span></div></div>'
       + '<div class="admin-row span2"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">user problems arrive here as tickets — click one to open</span><button class="pill-btn" data-admin="support-open">📨 Load tickets</button></div>'
       + '<div class="span2" id="adminSupportRow">'
       + '<div id="adminTickets" class="adm-tickets"><span class="muted-txt">Click “Load tickets”…</span></div>'
@@ -1976,10 +1979,21 @@
     document.body.appendChild(d);
 
     $('#adminClose').onclick = () => d.classList.add('hide');
-    d.addEventListener('click', e => {
+    d.addEventListener('click', async e => {
       if (e.target === d) d.classList.add('hide');
       const tk = e.target.closest('[data-ticket]');
       if (tk) { openAdmThread(tk.dataset.ticket); return; }
+      const nd = e.target.closest('[data-notif-del]');
+      if (nd) {
+        const id = Number(nd.dataset.notifDel);
+        if (!id) return;
+        try {
+          await fetch(API_BASE + '/api/admin/notification/one', { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY }, body: JSON.stringify({ id }) });
+          toast('Notification deleted 🗑', '🔔');
+          adminAction('notif-list');
+        } catch (e2) { toast('Failed to delete', '⚠️'); }
+        return;
+      }
       const bk = e.target.closest('#admThreadBack');
       if (bk) {
         const tv = $('#adminThreadView'), cards = $('#adminTickets');
@@ -2095,6 +2109,36 @@
         SUPPORT_ALL = await r2.json();
         if (cards) { cards.innerHTML = admTicketsHTML(SUPPORT_ALL); cards.classList.remove('hide'); }
       } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
+    if (kind === 'del-video') {
+      const sel = $('#adminVideoSel');
+      const id = sel && sel.value;
+      if (!id) { toast('Select a video first', '⚠️'); return; }
+      const label = (sel.options[sel.selectedIndex] && sel.options[sel.selectedIndex].textContent || '').slice(0, 60);
+      if (!confirm('Delete «' + label + '» permanently?\nComments, likes and its files will be removed too.')) return;
+      try {
+        const r = await fetch(API_BASE + '/api/videos/' + id, { method: 'DELETE', headers: { 'X-Admin-Key': ADMIN_KEY } });
+        if (r.status === 204 || r.ok) {
+          toast('Deleted: ' + label + ' 🗑', '✅');
+          try { await loadVideos(); } catch (e) {}
+          fillAdminVideos();
+        } else toast('Delete failed (' + r.status + ')', '⚠️');
+      } catch (e) { toast('Delete failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
+    if (kind === 'notif-list') {
+      try {
+        const r = await fetch(API_BASE + '/api/admin/notifications', { headers: { 'X-Admin-Key': ADMIN_KEY } });
+        const list = await r.json();
+        const el = $('#adminNotifList');
+        if (el) {
+          el.innerHTML = list.length ? list.map(n =>
+            '<div class="adm-notif"><span style="flex:1">' + esc(n.text) + (n.target ? ' <span class="muted-txt">→ ' + esc(n.target) + '</span>' : '') + '</span>'
+            + '<button class="pill-btn danger" data-notif-del="' + n.id + '" style="padding:1px 9px;font-size:11px">✕</button></div>'
+          ).join('') : '<span class="muted-txt">No notifications 🎉</span>';
+        }
+      } catch (e) { toast('Failed to load notifications', '⚠️'); }
       return;
     }
     if (kind === 'chat-on' || kind === 'chat-off') {
