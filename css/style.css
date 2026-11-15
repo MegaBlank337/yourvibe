@@ -387,14 +387,14 @@ main > * { animation: fadeUp .38s ease both; }
   height: 100%;
   scroll-snap-align: start; scroll-snap-stop: always;
   display: flex; align-items: center; justify-content: center;
-  gap: 22px;
+  position: relative;
   padding: 10px 110px 10px 30px;
 }
 .short-left {
+  position: absolute; left: 30px; bottom: 34px;
   max-width: 300px; min-width: 200px;
   display: flex; flex-direction: column; align-items: flex-start; gap: 11px;
-  align-self: flex-end;
-  padding-bottom: 30px;
+  z-index: 4;
 }
 .sl-cat { font-size: 13px; color: rgba(232, 236, 255, .55); font-weight: 600; letter-spacing: .3px; }
 .sl-user {
@@ -422,7 +422,8 @@ main > * { animation: fadeUp .38s ease both; }
 
 .short-frame {
   position: relative;
-  height: calc(100% - 16px);
+  height: min(calc(100vh - 130px), 820px);
+  max-width: 46vw;
   aspect-ratio: 9 / 16;
   border-radius: 18px;
   overflow: hidden;
@@ -444,9 +445,9 @@ main > * { animation: fadeUp .38s ease both; }
 
 /* action rail — OUTSIDE the video, to the right, like YouTube Shorts */
 .short-rail {
+  position: absolute; right: 104px; bottom: 34px;
   display: flex; flex-direction: column; align-items: center; gap: 18px;
-  align-self: flex-end;
-  padding-bottom: 30px;
+  z-index: 4;
 }
 .rail-item { display: flex; flex-direction: column; align-items: center; gap: 5px; }
 .rail-lbl { font-size: 12.5px; font-weight: 600; color: rgba(232, 236, 255, .78); text-align: center; max-width: 74px; }
@@ -487,16 +488,14 @@ main > * { animation: fadeUp .38s ease both; }
 .shorts-nav button:hover { border-color: rgba(0, 229, 255, .55); box-shadow: 0 0 14px rgba(0, 229, 255, .25); transform: scale(1.08); }
 
 @media (max-width: 900px) {
-  .short { padding: 10px 14px; gap: 12px; }
+  .short { padding: 10px 14px; }
   .short-left { display: none; }
-  .short-frame { height: calc(100% - 10px); }
+  .short-frame { height: min(calc(100vh - 80px), 640px); max-width: 92vw; }
   .short-rail {
     position: absolute;
     right: calc(50% - min(215px, 47vw));
     bottom: 9%;
-    padding-bottom: 0;
   }
-  .short-left { padding-bottom: 0; }
   .rail-lbl { color: #fff; text-shadow: 0 1px 6px #000; }
   .shorts-nav { right: 10px; }
 }
