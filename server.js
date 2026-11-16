@@ -1361,7 +1361,7 @@ app.post('/api/admin/creator/color', async (req, res) => {
     const name = String((req.body && req.body.name) || '').trim().slice(0, 50);
     const color = String((req.body && req.body.color) || '').trim().toLowerCase().slice(0, 20) || null;
     if (!name) return res.status(400).json({ error: 'missing name' });
-    if (color && !['bronze', 'silver', 'gold', 'diamond', 'ruby'].includes(color)) return res.status(400).json({ error: 'bad color' });
+    if (color && !['bronze', 'silver', 'gold', 'diamond', 'ruby', 'emerald'].includes(color)) return res.status(400).json({ error: 'bad color' });
     await q('insert into creators (name, subs, color) values ($1, 0, $2) on conflict (name) do update set color = $2', [name, color]);
     res.json({ ok: true, name, color });
   } catch (e) { res.status(500).json({ error: 'failed' }); }
