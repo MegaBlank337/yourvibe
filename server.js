@@ -1551,6 +1551,16 @@ app.get('/api/admin/notifications', async (req, res) => {
   } catch (e) { res.json([]); }
 });
 
+/* admin: list Groq models available to this key */
+app.get('/api/admin/ai/models', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const r = await fetch('https://api.groq.com/openai/v1/models', { headers: { Authorization: 'Bearer ' + (process.env.GROQ_API_KEY || '') } });
+    const j = await r.json();
+    res.json((j.data || []).map(m => m.id));
+  } catch (e) { res.json({ error: String(e.message) }); }
+});
+
 /* admin: AI suggests new feature ideas */
 app.post('/api/admin/ai/ideas', async (req, res) => {
   try {
@@ -1715,7 +1725,7 @@ async function aiCall(messages) {
   const providers = [];
   if (DKEY) providers.push({ url: 'https://api.deepseek.com/chat/completions', model: 'deepseek-chat', key: DKEY });
   if (OKEY) providers.push({ url: 'https://openrouter.ai/api/v1/chat/completions', model: 'deepseek/deepseek-chat-v3-0324:free', key: OKEY, extra: { 'HTTP-Referer': 'https://yourvibe-9uqv.onrender.com' } });
-  if (GROQ) providers.push({ url: 'https://api.groq.com/openai/v1/chat/completions', model: 'llama-3.3-70b-versatile', key: GROQ });
+  if (GROQ) ['llama-3.1-8b-instant', 'openai/gpt-oss-120b', 'meta-llama/llama-4-scout-17b-16e-instruct', 'moonshotai/kimi-k2-instruct', 'gemma2-9b-it'].forEach(m => providers.push({ url: 'https://api.groq.com/openai/v1/chat/completions', model: m, key: GROQ }));
   if (GEM) providers.push({ gemini: 'gemini-3.8-flash', key: GEM });
   if (!providers.length) throw new Error('AI is not configured — add one of: DEEPSEEK_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY in the Render environment');
   let lastErr = 'no provider';
