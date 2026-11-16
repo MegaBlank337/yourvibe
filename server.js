@@ -1711,18 +1711,29 @@ const AI_IDEAS_SYS = ['You are the idea engine for YourVibe — a neon YouTube-s
   'Suggest 5 NEW concrete feature ideas the developer could build next. One per line, format: 💡 <idea> — <one-sentence why it is cool>. No preamble, no numbering.'].join(' ');
 
 async function aiCall(messages) {
+  /* free-friendly chain: DeepSeek → OpenRouter (deepseek:free) → Groq (llama, free) → Google Gemini (free tier) */
   const DKEY = process.env.DEEPSEEK_API_KEY || '';
   const OKEY = process.env.OPENROUTER_API_KEY || '';
-  const key = DKEY || OKEY;
-  if (!key) throw new Error('AI is not configured — add DEEPSEEK_API_KEY (or OPENROUTER_API_KEY) in the Render environment');
-  const url = DKEY ? 'https://api.deepseek.com/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions';
-  const model = DKEY ? 'deepseek-chat' : 'deepseek/deepseek-chat-v3-0324:free';
-  const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key };
-  if (!DKEY) headers['HTTP-Referer'] = 'https://yourvibe-9uqv.onrender.com';
-  const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ model, messages, max_tokens: 380, temperature: 0.7 }) });
-  if (!r.ok) throw new Error('AI http ' + r.status + ' ' + (await r.text()).slice(0, 120));
-  const j = await r.json();
-  return ((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '').trim();
+  const GROQ = process.env.GROQ_API_KEY || '';
+  const GEM = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_KEY || '';
+  const providers = [];
+  if (DKEY) providers.push({ url: 'https://api.deepseek.com/chat/completions', model: 'deepseek-chat', key: DKEY });
+  if (OKEY) providers.push({ url: 'https://openrouter.ai/api/v1/chat/completions', model: 'deepseek/deepseek-chat-v3-0324:free', key: OKEY, extra: { 'HTTP-Referer': 'https://yourvibe-9uqv.onrender.com' } });
+  if (GROQ) providers.push({ url: 'https://api.groq.com/openai/v1/chat/completions', model: 'llama-3.3-70b-versatile', key: GROQ });
+  if (GEM) providers.push({ url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: 'gemini-2.0-flash', key: GEM });
+  if (!providers.length) throw new Error('AI is not configured — add one of: DEEPSEEK_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY in the Render environment');
+  let lastErr = 'no provider';
+  for (const p of providers) {
+    try {
+      const r = await fetch(p.url, { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + p.key }, p.extra || {}), body: JSON.stringify({ model: p.model, messages, max_tokens: 380, temperature: 0.7 }) });
+      if (!r.ok) { lastErr = p.model + ' http ' + r.status; continue; }
+      const j = await r.json();
+      const out = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+      if (out.trim()) return out.trim();
+      lastErr = p.model + ' empty response';
+    } catch (e) { lastErr = p.model + ' ' + (e.message || 'error'); }
+  }
+  throw new Error(lastErr);
 }
 
 /* ── support chat (users ↔ admin) ── */
