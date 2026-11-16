@@ -1438,6 +1438,7 @@
       + '<option value="silver"' + (myRank === 'silver' ? ' selected' : (subsNow >= 100000 ? '' : ' disabled')) + '>🥈 Silver — 100K followers</option>'
       + '<option value="gold"' + (myRank === 'gold' ? ' selected' : (subsNow >= 1000000 ? '' : ' disabled')) + '>🥇 Gold — 1M followers</option>'
       + '<option value="diamond"' + (myRank === 'diamond' ? ' selected' : (subsNow >= 10000000 ? '' : ' disabled')) + '>💎 Diamond — 10M followers</option>'
+      + '<option value="emerald"' + (myRank === 'emerald' ? ' selected' : (subsNow >= 50000000 ? '' : ' disabled')) + '>💚 Emerald — 50M followers</option>'
       + '<option value="ruby"' + (myRank === 'ruby' ? ' selected' : (subsNow >= 100000000 ? '' : ' disabled')) + '>🔴 Ruby — 100M followers</option>'
       + '</select><p class="muted-txt">unlocks with followers — colors your name + avatar ring everywhere</p></div>'
       + '<div class="field"><label>Banner</label><div class="file-row">'
