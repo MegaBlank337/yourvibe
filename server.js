@@ -296,6 +296,7 @@ async function migrate() {
   await q(`create table if not exists playlists (id bigserial primary key, owner text not null, name text not null, created_at timestamptz default now())`);
   await q(`create table if not exists playlist_items (id bigserial primary key, playlist_id bigint references playlists(id) on delete cascade, video_id uuid references videos(id) on delete cascade, ord int default 0)`);
   await q(`create table if not exists stream_subs (creator text, user_name text, primary key (creator, user_name))`);
+  await q(`alter table support add column if not exists ai boolean default false`);
   await q(`alter table videos add column if not exists bunny_guid text`);
   await q(`update videos set bunny_guid = replace(video_path, 'bunny:', '') where store = 'bunny' and bunny_guid is null`);
   await q(`alter table videos add column if not exists merge_state text default 'idle'`);
@@ -1550,6 +1551,19 @@ app.get('/api/admin/notifications', async (req, res) => {
   } catch (e) { res.json([]); }
 });
 
+/* admin: AI suggests new feature ideas */
+app.post('/api/admin/ai/ideas', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const topic = String((req.body && req.body.topic) || '').slice(0, 200);
+    const text = await aiCall([
+      { role: 'system', content: AI_IDEAS_SYS },
+      { role: 'user', content: topic || 'Suggest 5 new feature ideas for YourVibe' }
+    ]);
+    res.json({ text });
+  } catch (e) { res.status(500).json({ error: String(e.message || 'ai failed') }); }
+});
+
 /* delete ONE notification */
 app.delete('/api/admin/notification/one', async (req, res) => {
   try {
@@ -1687,6 +1701,30 @@ app.post('/api/admin/video/:id/:action', async (req, res) => {
 
 
 
+/* ── AI helper (DeepSeek API, OpenRouter free DeepSeek as fallback) ── */
+const AI_SYS = ['You are the AI helper of YourVibe — a neon YouTube-style video site.',
+  'The site has: video uploads (segmented, max 2GB), Shorts (vertical feed), LIVE streams (screen/camera sharing, viewer chat, floating emoji reactions, viewers counter, VOD recordings in the channel Streams tab), accounts (avatar, banner, bio), subscriptions, likes/dislikes, comments with replies and likes, playlists, watch later, notifications (bell), an admin panel (F4), rank colors (bronze/silver/gold/diamond/ruby/emerald), a help chat with the admin, and a TikTok-style comments drawer for Shorts.',
+  'A user writes a problem in the help chat. Ask 1-2 short clarifying questions and give concrete steps to fix it.',
+  'You only ADVISE — you cannot change anything on the site. Be concise (under 120 words).',
+  'ALWAYS answer in the same language the user wrote in (Russian or English).'].join(' ');
+const AI_IDEAS_SYS = ['You are the idea engine for YourVibe — a neon YouTube-style site with videos, shorts, live streams (chat, emoji reactions, VODs), accounts, playlists, comments (replies+likes), rank colors, notifications and an admin panel.',
+  'Suggest 5 NEW concrete feature ideas the developer could build next. One per line, format: 💡 <idea> — <one-sentence why it is cool>. No preamble, no numbering.'].join(' ');
+
+async function aiCall(messages) {
+  const DKEY = process.env.DEEPSEEK_API_KEY || '';
+  const OKEY = process.env.OPENROUTER_API_KEY || '';
+  const key = DKEY || OKEY;
+  if (!key) throw new Error('AI is not configured — add DEEPSEEK_API_KEY (or OPENROUTER_API_KEY) in the Render environment');
+  const url = DKEY ? 'https://api.deepseek.com/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions';
+  const model = DKEY ? 'deepseek-chat' : 'deepseek/deepseek-chat-v3-0324:free';
+  const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key };
+  if (!DKEY) headers['HTTP-Referer'] = 'https://yourvibe-9uqv.onrender.com';
+  const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ model, messages, max_tokens: 380, temperature: 0.7 }) });
+  if (!r.ok) throw new Error('AI http ' + r.status + ' ' + (await r.text()).slice(0, 120));
+  const j = await r.json();
+  return ((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '').trim();
+}
+
 /* ── support chat (users ↔ admin) ── */
 app.post('/api/support', async (req, res) => {
   try {
@@ -1697,6 +1735,22 @@ app.post('/api/support', async (req, res) => {
     const r = await q('insert into support (username, text, from_admin) values ($1, $2, $3) returning id, username, text, from_admin, created_at',
       [username, text, fromAdmin]);
     res.status(201).json(r.rows[0]);
+    /* AI helper answers user problems automatically (admin replies stay human) */
+    if (!fromAdmin) {
+      setImmediate(() => {
+        (async () => {
+          try {
+            const cd = cdCheck('ai:' + username, 40);
+            if (cd) return;
+            const hist = await q('select text, from_admin, ai from support where username = $1 order by id desc limit 12', [username]);
+            const msgs = [{ role: 'system', content: AI_SYS }]
+              .concat(hist.rows.slice().reverse().map(h => ({ role: (h.from_admin || h.ai) ? 'assistant' : 'user', content: h.text })));
+            const aiText = await aiCall(msgs);
+            if (aiText) await q('insert into support (username, text, from_admin, ai) values ($1, $2, false, true)', [username, aiText.slice(0, 900)]);
+          } catch (e) { console.error('ai reply:', e.message); }
+        })();
+      });
+    }
   } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
 
@@ -1704,7 +1758,7 @@ app.get('/api/support', async (req, res) => {
   try {
     const username = String(req.query.user || '').trim().slice(0, 50);
     if (!username) return res.json([]);
-    const r = await q('select id, username, text, from_admin, created_at from support where username = $1 order by id desc limit 100', [username]);
+    const r = await q('select id, username, text, from_admin, ai, created_at from support where username = $1 order by id desc limit 100', [username]);
     res.json(r.rows);
   } catch (e) { res.json([]); }
 });
@@ -1712,7 +1766,7 @@ app.get('/api/support', async (req, res) => {
 app.get('/api/support/all', async (req, res) => {
   try {
     if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
-    const r = await q('select id, username, text, from_admin, created_at from support order by id desc limit 200');
+    const r = await q('select id, username, text, from_admin, ai, created_at from support order by id desc limit 200');
     res.json(r.rows);
   } catch (e) { res.json([]); }
 });
