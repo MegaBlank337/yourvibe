@@ -737,7 +737,7 @@ app.post('/api/auth/claim', async (req, res) => {
     for (const c of claims) {
       if (!c || !/^[A-Za-z0-9-]{8,64}$/.test(String(c.id || ''))) continue;
       try {
-        const r = await q('update videos set uploader = $1 where id = $2 and del_key = $3 and uploader <> $1',
+        const r = await q('update videos set uploader = $1 where id = $2 and del_key = $3 and uploader <> $1 and uploader not in (select username from users)',
           [username, c.id, String(c.del_key || '')]);
         moved += r.rowCount || 0;
       } catch (e) { /* skip */ }
@@ -752,6 +752,7 @@ app.post('/api/auth/claim', async (req, res) => {
         [username]);
       const r = await q(
         `update videos set uploader = $1 where uploader <> $1
+         and uploader not in (select username from users)
          and regexp_replace(lower(uploader), '[^a-z0-9]', '', 'g') = regexp_replace(lower($1), '[^a-z0-9]', '', 'g')`,
         [username]);
       moved += r.rowCount || 0;
