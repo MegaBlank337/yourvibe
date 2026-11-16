@@ -268,6 +268,7 @@
     gold:   { hex: '#f2d98c', label: 'Gold' },
     diamond: { hex: '#a9d6ef', label: 'Diamond' },
     ruby:   { hex: '#f0a1b0', label: 'Ruby' },
+    emerald: { hex: '#3ddc84', label: 'Emerald' },
   };
   function rankOf(name) {
     const c = (COLORS[name] || '').toLowerCase();
@@ -1998,7 +1999,7 @@
       + '<div class="admin-row"><input type="text" id="adminAnnText" maxlength="300" placeholder="📣 Announcement text (everyone sees it)"><button class="pill-btn" data-admin="announce">📣 Post</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">announcement shows as a banner on the site</span><button class="pill-btn danger" data-admin="announce-clear">🗑 Remove announcement</button></div>'
       + '<div class="admin-row"><input type="text" id="adminVerifyName" maxlength="50" placeholder="✔ creator name to verify"><button class="pill-btn" data-admin="verify">✔ Verify</button><button class="pill-btn danger" data-admin="unverify">✕ Unverify</button></div>'
-      + '<div class="admin-row"><input type="text" id="adminColorName" maxlength="50" placeholder="creator name"><select id="adminColorSel"><option value="">no rank</option><option value="bronze">🥉 Bronze</option><option value="silver">🥈 Silver</option><option value="gold">🥇 Gold</option><option value="diamond">💎 Diamond</option><option value="ruby">🔴 Ruby</option></select><button class="pill-btn" data-admin="setcolor">🎨 Set color</button></div>'
+      + '<div class="admin-row"><input type="text" id="adminColorName" maxlength="50" placeholder="creator name"><select id="adminColorSel"><option value="">no rank</option><option value="bronze">🥉 Bronze</option><option value="silver">🥈 Silver</option><option value="gold">🥇 Gold</option><option value="diamond">💎 Diamond</option><option value="ruby">🔴 Ruby</option><option value="emerald">💎 Emerald (50M)</option></select><button class="pill-btn" data-admin="setcolor">🎨 Set color</button></div>'
       + '<div class="admin-row"><input type="text" id="adminNotifText" maxlength="300" placeholder="🔔 Notification text (from YourVibe ✓)"><button class="pill-btn" data-admin="notify">🔔 Send</button></div>'
       + '<div class="admin-row"><input type="text" id="adminNotifTo" maxlength="50" placeholder="to account (empty = everyone)"><span class="muted-txt" style="align-self:center;font-size:13px">leave empty = send to all</span></div>'
       + '<div class="admin-row"><input type="number" id="adminChatRate" min="1" max="60" placeholder="sec between comments"><select id="adminChatLang"><option value="ru">🇷🇺 RU</option><option value="en">🇬🇧 EN</option><option value="mix">🌐 EN+RU</option></select><button class="pill-btn" data-admin="chat-on">💬 Chat ON</button><button class="pill-btn danger" data-admin="chat-off">💬 OFF</button></div>'
