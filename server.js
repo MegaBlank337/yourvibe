@@ -1702,11 +1702,7 @@ app.post('/api/admin/video/:id/:action', async (req, res) => {
 
 
 /* ── AI helper (DeepSeek API, OpenRouter free DeepSeek as fallback) ── */
-const AI_SYS = ['You are the AI helper of YourVibe — a neon YouTube-style video site.',
-  'The site has: video uploads (segmented, max 2GB), Shorts (vertical feed), LIVE streams (screen/camera sharing, viewer chat, floating emoji reactions, viewers counter, VOD recordings in the channel Streams tab), accounts (avatar, banner, bio), subscriptions, likes/dislikes, comments with replies and likes, playlists, watch later, notifications (bell), an admin panel (F4), rank colors (bronze/silver/gold/diamond/ruby/emerald), a help chat with the admin, and a TikTok-style comments drawer for Shorts.',
-  'A user writes a problem in the help chat. Ask 1-2 short clarifying questions and give concrete steps to fix it.',
-  'You only ADVISE — you cannot change anything on the site. Be concise (under 120 words).',
-  'ALWAYS answer in the same language the user wrote in (Russian or English).'].join(' ');
+const AI_SYS = 'You are the AI helper of YourVibe — a neon YouTube-style site (videos, Shorts, LIVE streams with chat/reactions/VODs, accounts, subs, likes, comments with replies, playlists, notifications, rank colors, admin panel F4). A user writes a problem: ask 1-2 short clarifying questions and give concrete fix steps. You only advise. Under 100 words. Answer in the user\'s language (RU/EN).';
 const AI_IDEAS_SYS = ['You are the idea engine for YourVibe — a neon YouTube-style site with videos, shorts, live streams (chat, emoji reactions, VODs), accounts, playlists, comments (replies+likes), rank colors, notifications and an admin panel.',
   'Suggest 5 NEW concrete feature ideas the developer could build next. One per line, format: 💡 <idea> — <one-sentence why it is cool>. No preamble, no numbering.'].join(' ');
 
@@ -1742,7 +1738,11 @@ async function aiCall(messages) {
           body = { model: p.model, messages, max_tokens: 380, temperature: 0.7 };
         }
         const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
-        if (!r.ok) { lastErr = (p.model || p.gemini) + ' http ' + r.status + ' ' + (await r.text()).slice(0, 100); continue; }
+        if (!r.ok) {
+          lastErr = (p.model || p.gemini) + ' http ' + r.status + ' ' + (await r.text()).slice(0, 100);
+          if (r.status === 429 && attempt === 0) await new Promise(x => setTimeout(x, 9000)); // rate limit: pause before retry
+          continue;
+        }
         const j = await r.json();
         let out = '';
         if (p.gemini) out = ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts || []).map(x => x.text || '').join(''));
@@ -1770,12 +1770,18 @@ app.post('/api/support', async (req, res) => {
       setImmediate(() => {
         (async () => {
           try {
+            if (cdCheck('ai:global', 15)) return;           // ≤4 AI calls/min site-wide (free-tier safe)
             const cd = cdCheck('ai:' + username, 40);
             if (cd) return;
             const hist = await q('select text, from_admin, ai from support where username = $1 order by id desc limit 12', [username]);
             const msgs = [{ role: 'system', content: AI_SYS }]
               .concat(hist.rows.slice().reverse().map(h => ({ role: (h.from_admin || h.ai) ? 'assistant' : 'user', content: h.text })));
-            const aiText = await aiCall(msgs);
+            let aiText = null;
+            try { aiText = await aiCall(msgs); } catch (e) { console.error('ai reply attempt 1:', e.message); }
+            if (!aiText) {
+              await new Promise(x => setTimeout(x, 60000)); // free-tier limits reset — try once more
+              try { aiText = await aiCall(msgs); } catch (e) { console.error('ai reply attempt 2:', e.message); }
+            }
             if (aiText) await q('insert into support (username, text, from_admin, ai) values ($1, $2, false, true)', [username, aiText.slice(0, 900)]);
           } catch (e) { console.error('ai reply:', e.message); }
         })();
