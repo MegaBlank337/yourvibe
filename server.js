@@ -1719,6 +1719,7 @@ async function aiCall(messages) {
   if (GEM) providers.push({ gemini: 'gemini-3.8-flash', key: GEM });
   if (!providers.length) throw new Error('AI is not configured — add one of: DEEPSEEK_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY in the Render environment');
   let lastErr = 'no provider';
+  const chain = [];
   for (const p of providers) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -1740,6 +1741,7 @@ async function aiCall(messages) {
         const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
         if (!r.ok) {
           lastErr = (p.model || p.gemini) + ' http ' + r.status + ' ' + (await r.text()).slice(0, 100);
+          chain.push(lastErr);
           if (r.status === 429 && attempt === 0) await new Promise(x => setTimeout(x, 9000)); // rate limit: pause before retry
           continue;
         }
@@ -1749,10 +1751,10 @@ async function aiCall(messages) {
         else out = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
         if (out.trim()) return out.trim();
         lastErr = (p.model || p.gemini) + ' empty response';
-      } catch (e) { lastErr = (p.model || p.gemini) + ' ' + (e.message || 'error'); }
+      } catch (e) { lastErr = (p.model || p.gemini) + ' ' + (e.message || 'error'); chain.push(lastErr); }
     }
   }
-  throw new Error(lastErr);
+  throw new Error('chain: ' + chain.join(' | '));
 }
 
 /* ── support chat (users ↔ admin) ── */
