@@ -3172,11 +3172,12 @@
         .catch(() => { if (++mRetr >= 3) { mRetr = 0; mIdx++; } })
         .then(() => {
           mFetching = false;
-          if (mIdx >= 2 && !seeked) {
-            seeked = true;
-            /* join near the live edge (5s behind the newest appended data) */
-            if (isFinite(msRef.duration) && msRef.duration > 1) { try { v.currentTime = Math.max(0, msRef.duration - 5); } catch (e) {} }
-            v.play().catch(() => {});
+          if (mIdx >= 2 && !seeked) { seeked = true; v.play().catch(() => {}); }
+          /* stay at the LIVE edge: appends run faster than playback, so when the
+             buffered edge gets >20s ahead, jump to ~5s behind NOW — joining mid-stream
+             starts at the live edge instead of the stream start */
+          if (!streamOver && isFinite(msRef.duration) && msRef.duration - v.currentTime > 20) {
+            try { v.currentTime = Math.max(0, msRef.duration - 5); } catch (e) {}
           }
           stepMse();
         });
