@@ -290,6 +290,12 @@ async function migrate() {
   await q(`alter table videos add column if not exists sizes jsonb default '[]'`);
   await q(`alter table videos add column if not exists store text default 'sb'`);
   await q(`alter table videos add column if not exists live_mime text`);
+  await q(`alter table comments add column if not exists parent_id bigint`);
+  await q(`alter table comments add column if not exists likes int default 0`);
+  await q(`create table if not exists comment_likes (comment_id bigint references comments(id) on delete cascade, voter text, unique(comment_id, voter))`);
+  await q(`create table if not exists playlists (id bigserial primary key, owner text not null, name text not null, created_at timestamptz default now())`);
+  await q(`create table if not exists playlist_items (id bigserial primary key, playlist_id bigint references playlists(id) on delete cascade, video_id uuid references videos(id) on delete cascade, ord int default 0)`);
+  await q(`create table if not exists stream_subs (creator text, user_name text, primary key (creator, user_name))`);
   await q(`alter table videos add column if not exists bunny_guid text`);
   await q(`update videos set bunny_guid = replace(video_path, 'bunny:', '') where store = 'bunny' and bunny_guid is null`);
   await q(`alter table videos add column if not exists merge_state text default 'idle'`);
@@ -1131,7 +1137,7 @@ app.post('/api/videos/:id/view', async (req, res) => {
 
 app.get('/api/videos/:id/comments', async (req, res) => {
   try {
-    const r = await q('select id, author, text, created_at from comments where video_id = $1 order by created_at desc limit 10000', [req.params.id]);
+    const r = await q('select id, author, text, created_at, parent_id, likes from comments where video_id = $1 order by created_at desc limit 10000', [req.params.id]);
     res.json(r.rows);
   } catch (e) { res.status(500).json({ error: 'db down' }); }
 });
@@ -1144,10 +1150,120 @@ app.post('/api/videos/:id/comments', async (req, res) => {
     const author = authName || String((req.body && req.body.author) || 'Anonymous').slice(0, 50);
     const text = String((req.body && req.body.text) || '').trim().slice(0, 500);
     if (!text) return res.status(400).json({ error: 'empty comment' });
-    const r = await q('insert into comments (video_id, author, text) values ($1,$2,$3) returning id, author, text, created_at',
-      [req.params.id, author, text]);
+    let parent = null;
+    if (req.body && req.body.parent) {
+      const pr = await q('select id from comments where id = $1 and video_id = $2', [req.body.parent, req.params.id]);
+      if (pr.rows.length) parent = Number(req.body.parent);
+    }
+    const r = parent
+      ? await q('insert into comments (video_id, author, text, parent_id) values ($1,$2,$3,$4) returning id, author, text, created_at, parent_id, likes', [req.params.id, author, text, parent])
+      : await q('insert into comments (video_id, author, text) values ($1,$2,$3) returning id, author, text, created_at, parent_id, likes', [req.params.id, author, text]);
     res.status(201).json(r.rows[0]);
   } catch (e) { res.status(500).json({ error: 'db down' }); }
+});
+
+/* like / unlike a comment — toggled per voter */
+app.post('/api/videos/:id/comments/:cid/like', async (req, res) => {
+  try {
+    const voter = await authUser(req) || String((req.body && req.body.voter) || clientIp(req)).slice(0, 60);
+    const cid = parseInt(req.params.cid, 10);
+    if (!cid) return res.status(400).json({ error: 'bad id' });
+    const on = await q('insert into comment_likes (comment_id, voter) values ($1, $2) on conflict (comment_id, voter) do nothing returning voter', [cid, voter]);
+    let likes;
+    if (on.rows.length) {
+      likes = await q('update comments set likes = likes + 1 where id = $1 returning likes', [cid]);
+    } else {
+      await q('delete from comment_likes where comment_id = $1 and voter = $2', [cid, voter]);
+      likes = await q('update comments set likes = greatest(0, likes - 1) where id = $1 returning likes', [cid]);
+    }
+    res.json({ ok: true, likes: (likes.rows[0] || {}).likes || 0 });
+  } catch (e) { res.status(500).json({ error: 'db down' }); }
+});
+
+/* ── playlists (logged-in users) ── */
+app.get('/api/playlists', async (req, res) => {
+  try {
+    const authName = await authUser(req);
+    if (!authName) return res.status(401).json({ error: 'log in' });
+    const r = await q('select id, name, created_at from playlists where owner = $1 order by id desc limit 100', [authName]);
+    const out = [];
+    for (const pl of r.rows) {
+      const items = await q('select video_id from playlist_items where playlist_id = $1 order by ord asc, id asc', [pl.id]);
+      out.push({ id: pl.id, name: pl.name, created_at: pl.created_at, items: items.map(x => x.video_id) });
+    }
+    res.json(out);
+  } catch (e) { res.json([]); }
+});
+
+app.post('/api/playlists', async (req, res) => {
+  try {
+    const authName = await authUser(req);
+    if (!authName) return res.status(401).json({ error: 'log in' });
+    const name = String((req.body && req.body.name) || '').trim().slice(0, 60);
+    if (!name) return res.status(400).json({ error: 'empty name' });
+    const r = await q('insert into playlists (owner, name) values ($1, $2) returning id, name', [authName, name]);
+    res.status(201).json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.post('/api/playlists/:id/add', async (req, res) => {
+  try {
+    const authName = await authUser(req);
+    if (!authName) return res.status(401).json({ error: 'log in' });
+    const pid = parseInt(req.params.id, 10);
+    const vid = String((req.body && req.body.videoId) || '');
+    const own = await q('select id from playlists where id = $1 and owner = $2', [pid, authName]);
+    if (!own.rows.length) return res.status(404).json({ error: 'playlist not found' });
+    const n = await q('select count(*)::int as n from playlist_items where playlist_id = $1', [pid]);
+    await q('insert into playlist_items (playlist_id, video_id, ord) values ($1, $2, $3) on conflict do nothing', [pid, vid, n.rows[0].n]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.post('/api/playlists/:id/remove', async (req, res) => {
+  try {
+    const authName = await authUser(req);
+    if (!authName) return res.status(401).json({ error: 'log in' });
+    const pid = parseInt(req.params.id, 10);
+    const vid = String((req.body && req.body.videoId) || '');
+    const own = await q('select id from playlists where id = $1 and owner = $2', [pid, authName]);
+    if (!own.rows.length) return res.status(404).json({ error: 'playlist not found' });
+    await q('delete from playlist_items where playlist_id = $1 and video_id = $2', [pid, vid]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.delete('/api/playlists/:id', async (req, res) => {
+  try {
+    const authName = await authUser(req);
+    if (!authName) return res.status(401).json({ error: 'log in' });
+    const pid = parseInt(req.params.id, 10);
+    await q('delete from playlists where id = $1 and owner = $2', [pid, authName]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+/* ── stream bell: notify bell-subscribers when a creator goes live ── */
+app.post('/api/stream-subs/toggle', async (req, res) => {
+  try {
+    const authName = await authUser(req);
+    if (!authName) return res.status(401).json({ error: 'log in' });
+    const creator = String((req.body && req.body.creator) || '').slice(0, 50);
+    if (!creator) return res.status(400).json({ error: 'missing creator' });
+    const on = await q('insert into stream_subs (creator, user_name) values ($1, $2) on conflict (creator, user_name) do nothing returning creator', [creator, authName]);
+    if (on.rows.length) return res.json({ on: true });
+    await q('delete from stream_subs where creator = $1 and user_name = $2', [creator, authName]);
+    res.json({ on: false });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.get('/api/stream-subs', async (req, res) => {
+  try {
+    const authName = await authUser(req);
+    if (!authName) return res.json([]);
+    const r = await q('select creator from stream_subs where user_name = $1', [authName]);
+    res.json(r.rows.map(x => x.creator));
+  } catch (e) { res.json([]); }
 });
 
 app.delete('/api/videos/:id', async (req, res) => {
@@ -1640,11 +1756,13 @@ app.post('/api/live/start', async (req, res) => {
     const viewersBase = 30 + crypto.randomInt(150);
     const viewersRate = 0.5 + Math.random() * 1.8;
 
-    liveStreams.set(id, { id, title, broadcaster: username, token, header: null, segs: [], n: 0, lastSeg: Date.now(), status: 'live', startedAt: Date.now(), thumbUrl, viewersBase, viewersRate, mime, sdp: { offer: null, answers: [] } });
+    liveStreams.set(id, { id, title, broadcaster: username, token, header: null, segs: [], n: 0, lastSeg: Date.now(), status: 'live', startedAt: Date.now(), thumbUrl, viewersBase, viewersRate, mime, reacts: [], reactN: 0, sdp: { offer: null, answers: [] } });
     try {
       await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,video_url,thumb_url,del_key,parts,sizes,store,live_mime)
                values ($1,$2,'','Other','video','LIVE',$3,$4,'',$5,$6,0,'[]','live',$7)`,
         [id, title, username, 'live:' + id, thumbUrl, crypto.randomBytes(16).toString('hex'), mime]);
+      /* stream bell: notify subscribers of this creator */
+      q('insert into notifications (text, target) select ' + "'🔴 ' || $1 || ' is LIVE: ' || $2, user_name from stream_subs where creator = $1'", [username, title]).catch(() => {});
     } catch (e) {}
     res.status(201).json({ id, title, broadcaster: username, viewers: viewersBase });
   } catch (e) {
@@ -1684,7 +1802,40 @@ app.get('/api/live/:id/playlist', (req, res) => {
   const elapsed = Math.max(1, Math.round((Date.now() - st.startedAt) / 1000));
   const natural = Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + elapsed * st.viewersRate + crypto.randomInt(15)));
   const viewers = Math.max(0, natural + (st.viewersBoost || 0));
-  res.json({ status: st.status, title: st.title, broadcaster: st.broadcaster, segs: st.segs, startedAt: st.startedAt, thumb: st.thumbUrl, mime: st.mime || '', viewers });
+  res.json({ status: st.status, title: st.title, broadcaster: st.broadcaster, segs: st.segs, startedAt: st.startedAt, thumb: st.thumbUrl, mime: st.mime || '', reacts: (st.reacts || []).slice(-25), viewers });
+});
+
+/* viewer sends a floating emoji reaction */
+app.post('/api/live/:id/react', (req, res) => {
+  const st = liveStreams.get(req.params.id);
+  if (!st) return res.status(404).json({ error: 'stream not found' });
+  const e = String((req.body && req.body.emoji) || '').slice(0, 12);
+  if (!e) return res.status(400).json({ error: 'no emoji' });
+  st.reactN = (st.reactN || 0) + 1;
+  st.reacts = st.reacts || [];
+  st.reacts.push({ id: st.reactN, e, ts: Date.now() });
+  if (st.reacts.length > 40) st.reacts.splice(0, st.reacts.length - 40);
+  res.json({ ok: true, id: st.reactN });
+});
+
+/* admin launches an emoji burst on the current stream */
+app.post('/api/admin/live/react', (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const e = String((req.body && req.body.emoji) || '').slice(0, 12);
+    if (!e) return res.status(400).json({ error: 'no emoji' });
+    let target = null;
+    if (req.body && req.body.id) target = liveStreams.get(req.body.id);
+    if (!target) liveStreams.forEach(st => { if (st.status === 'live' && (!target || st.startedAt > target.startedAt)) target = st; });
+    if (!target) return res.status(404).json({ error: 'no live stream running' });
+    for (let i = 0; i < 8; i++) {
+      target.reactN = (target.reactN || 0) + 1;
+      target.reacts = target.reacts || [];
+      target.reacts.push({ id: target.reactN, e, ts: Date.now() });
+    }
+    if (target.reacts.length > 40) target.reacts.splice(0, target.reacts.length - 40);
+    res.json({ ok: true, id: target.id, title: target.title });
+  } catch (e2) { res.status(500).json({ error: 'failed' }); }
 });
 
 
