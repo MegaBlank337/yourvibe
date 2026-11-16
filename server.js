@@ -1190,7 +1190,7 @@ app.get('/api/playlists', async (req, res) => {
     for (const pl of r.rows) {
       let items = [];
       try { items = await q('select video_id from playlist_items where playlist_id = $1 order by ord asc, id asc', [pl.id]); } catch (e2) { console.error('playlist items:', e2.message); }
-      out.push({ id: pl.id, name: pl.name, created_at: pl.created_at, items: items.map(x => x.video_id) });
+      out.push({ id: pl.id, name: pl.name, created_at: pl.created_at, items: items.rows.map(x => x.video_id) });
     }
     res.json(out);
   } catch (e) { console.error('playlists GET:', e.message); res.status(500).json({ error: String(e.message) }); }
