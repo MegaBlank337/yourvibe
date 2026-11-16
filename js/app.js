@@ -230,6 +230,210 @@
     im.style.display = 'none';
   }, true);
 
+  /* ── hover preview: play the first seconds muted when hovering a card ── */
+  let hoverTimer = null, hoverVid = null;
+  document.addEventListener('mouseover', e => {
+    const th = e.target.closest('.thumb[data-vid]');
+    if (!th || matchMedia('(hover: none)').matches || hoverTimer) return;
+    hoverTimer = setTimeout(() => {
+      const v = byId(th.dataset.vid);
+      if (!v || th.querySelector('video')) return;
+      const el = document.createElement('video');
+      el.className = 'thumb-prev';
+      el.muted = true; el.loop = true; el.autoplay = true;
+      el.setAttribute('playsinline', '');
+      el.preload = 'metadata';
+      el.src = srcOf(v);
+      el.addEventListener('loadeddata', () => { try { el.currentTime = 4; } catch (x) {} });
+      el.addEventListener('error', () => { el.remove(); if (hoverVid === el) hoverVid = null; });
+      el.play().catch(() => {});
+      th.appendChild(el);
+      hoverVid = el;
+    }, 550);
+  });
+  document.addEventListener('mouseout', e => {
+    if (!e.target.closest || !e.target.closest('.thumb[data-vid]')) return;
+    if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+    if (hoverVid) { hoverVid.pause(); hoverVid.remove(); hoverVid = null; }
+  });
+
+  /* ── floating hearts / emojis ── */
+  function spawnHearts(x, y, emoji) {
+    emoji = emoji || '❤️';
+    for (let i = 0; i < 7; i++) {
+      const h = document.createElement('span');
+      h.className = 'float-emoji';
+      h.textContent = emoji;
+      h.style.left = (x - 14 + (Math.random() * 56 - 28)) + 'px';
+      h.style.top = (y - 10) + 'px';
+      h.style.setProperty('--dx', (Math.random() * 90 - 45) + 'px');
+      h.style.animationDelay = (i * 55) + 'ms';
+      document.body.appendChild(h);
+      setTimeout(() => h.remove(), 1700);
+    }
+  }
+
+  /* ── TikTok-style shorts comments drawer ── */
+  function openShortComments(id) {
+    const old = document.querySelector('.sc-drawer-wrap');
+    if (old) old.remove();
+    const wrap = document.createElement('div');
+    wrap.className = 'sc-drawer-wrap';
+    wrap.innerHTML = '<div class="scd-backdrop"></div><div class="scd">'
+      + '<div class="scd-head"><b>💬 Comments</b><button class="scd-close">✕</button></div>'
+      + '<div class="scd-list">' + loadingHTML() + '</div>'
+      + '<form class="scd-form"><input maxlength="150" placeholder="Add a comment…"><button class="pill-btn" type="submit">➤</button></form>'
+      + '</div>';
+    document.body.appendChild(wrap);
+    const close = () => wrap.remove();
+    wrap.querySelector('.scd-backdrop').onclick = close;
+    wrap.querySelector('.scd-close').onclick = close;
+    const list = wrap.querySelector('.scd-list');
+    const load = async () => {
+      try {
+        const cl = await api('/api/videos/' + id + '/comments');
+        list.innerHTML = (cl || []).length ? cl.slice().reverse().map(c => {
+          const pal = palFor(c.author);
+          return '<div class="scd-item">' + avatarHTML({ name: c.author, colors: pal }, 34)
+            + '<div class="scd-body"><div class="scd-name">@' + nameHTML(c.author) + '</div>'
+            + '<div class="scd-txt">' + esc(c.text) + '</div>'
+            + '<div class="scd-time">' + timeAgo(c.created_at ? Date.parse(c.created_at) : Date.now()) + '</div></div></div>';
+        }).join('') : '<p class="muted-txt" style="padding:14px;text-align:center">No comments yet — be first 💬</p>';
+        list.scrollTop = list.scrollHeight;
+      } catch (e) { list.innerHTML = '<p class="muted-txt" style="padding:14px">Failed to load comments</p>'; }
+    };
+    load();
+    const f = wrap.querySelector('.scd-form');
+    f.onsubmit = async e2 => {
+      e2.preventDefault();
+      const inp = f.querySelector('input');
+      const text = (inp.value || '').trim();
+      if (!text) return;
+      inp.value = '';
+      try { await api('/api/videos/' + id + '/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ author: myName(), text }) }); load(); }
+      catch (e3) { toast(e3.message || 'failed', '⚠️'); }
+    };
+  }
+
+  /* ── add-to-playlist modal (watch page) ── */
+  async function plAddFlow(videoId) {
+    let pls = [];
+    try { pls = await api('/api/playlists'); } catch (e) { toast('Log in to use playlists 🔒', '🔒'); return; }
+    const d = document.createElement('div');
+    d.id = 'plModal';
+    d.innerHTML = '<div class="admin-box"><div class="admin-head"><span>▶ Add to playlist</span><button class="admin-close" id="plClose">✕</button></div>'
+      + '<div style="padding:16px;display:flex;flex-direction:column;gap:10px">'
+      + (pls.length ? pls.map(pl => '<div class="pl-row"><b>' + esc(pl.name) + '</b><span class="muted-txt">' + pl.items.length + ' videos</span><button class="pill-btn" data-pl-add="' + pl.id + '" data-vid="' + videoId + '">＋ Add</button></div>').join('') : '<p class="muted-txt">No playlists yet — create one below.</p>')
+      + '<div class="admin-row"><input type="text" id="plNewName" maxlength="60" placeholder="New playlist name"><button class="pill-btn" id="plCreate">＋ Create</button></div>'
+      + '</div></div>';
+    document.body.appendChild(d);
+    d.querySelector('#plClose').onclick = () => d.remove();
+    d.addEventListener('click', e => {
+      if (e.target === d) d.remove();
+      const add = e.target.closest('[data-pl-add]');
+      if (add) {
+        api('/api/playlists/' + add.dataset.plAdd + '/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ videoId: add.dataset.vid }) })
+          .then(() => { toast('Added to playlist ▶', '✅'); d.remove(); })
+          .catch(e2 => toast(e2.message || 'failed', '⚠️'));
+      }
+    });
+    d.querySelector('#plCreate').onclick = async () => {
+      const name = (d.querySelector('#plNewName').value || '').trim();
+      if (!name) return;
+      try {
+        const created = await api('/api/playlists', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+        await api('/api/playlists/' + created.id + '/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ videoId }) });
+        toast('Playlist "' + name + '" created ▶', '✅');
+        d.remove();
+      } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
+    };
+  }
+
+  /* ── stream bell (channel page) ── */
+  let STREAM_SUBS = [];
+  async function loadStreamSubs() { try { STREAM_SUBS = await api('/api/stream-subs'); } catch (e) { STREAM_SUBS = []; } }
+  function streamBellHTML(name) {
+    if (!S.auth || !S.auth.token) return '';
+    const on = STREAM_SUBS.includes(name);
+    return '<button class="pill-btn' + (on ? ' on' : ' ghost') + '" data-action="stream-bell" data-ch="' + esc(name) + '">' + (on ? '🔔 Notify on' : '🔕 Notify streams') + '</button>';
+  }
+
+  document.addEventListener('click', async e => {
+    const cl = e.target.closest('[data-clike]');
+    if (cl) {
+      e.preventDefault();
+      const cid = Number(cl.dataset.clike);
+      const n = cl.querySelector('.cl-n');
+      try {
+        const r = await api('/api/videos/' + curCommentVid + '/comments/' + cid + '/like', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voter: supportName() }) });
+        if (n) n.textContent = r.likes ? fmtNum(r.likes) : '';
+        cl.classList.toggle('on', !!r.likes);
+      } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
+      return;
+    }
+    const cr = e.target.closest('[data-creply]');
+    if (cr) {
+      e.preventDefault();
+      const item = cr.closest('.c-item');
+      if (!item || item.querySelector('.c-mini-form')) return;
+      const form = document.createElement('form');
+      form.className = 'c-mini-form';
+      form.dataset.form = 'creply';
+      form.dataset.parent = cr.dataset.creply;
+      form.innerHTML = '<input name="ctext" placeholder="Reply to @' + cr.dataset.cuser + '…" maxlength="300"><button class="pill-btn">➤</button>';
+      const box = item.querySelector('.c-replies');
+      box.before(form);
+      form.querySelector('input').focus();
+      return;
+    }
+    const pp = e.target.closest('[data-pl-play]');
+    if (pp) {
+      try {
+        const pls = await api('/api/playlists');
+        const pl = pls.find(x => String(x.id) === pp.dataset.plPlay);
+        if (pl && pl.items.length) {
+          S.playQueue = pl.items.slice(1);
+          YV.store.save();
+          location.hash = '#/watch/' + pl.items[0];
+          toast('Playing playlist: ' + pl.name + ' ▶', '⏭');
+        }
+      } catch (e2) {}
+      return;
+    }
+    const pd = e.target.closest('[data-pl-del]');
+    if (pd) {
+      try { await api('/api/playlists/' + pd.dataset.plDel, { method: 'DELETE' }); toast('Playlist deleted 🗑', '🗑'); navigate(); } catch (e2) {}
+      return;
+    }
+    const sb = e.target.closest('[data-action="stream-bell"]');
+    if (sb) {
+      try {
+        const r = await api('/api/stream-subs/toggle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ creator: sb.dataset.ch }) });
+        toast(r.on ? '🔔 ON — you will know when they go live' : '🔕 Notifications off', r.on ? '🔔' : '🔕');
+        navigate();
+      } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
+      return;
+    }
+  });
+  document.addEventListener('submit', async e => {
+    const f = e.target;
+    if (f.dataset && f.dataset.form === 'creply') {
+      e.preventDefault();
+      const input = f.querySelector('input');
+      const text = (input.value || '').trim();
+      if (!text) return;
+      input.value = '';
+      try {
+        const c = await api('/api/videos/' + curCommentVid + '/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ author: myName(), text, parent: f.dataset.parent }) });
+        const holder = f.parentElement;
+        const box = holder.querySelector('.c-replies');
+        if (box) box.insertAdjacentHTML('beforeend', cItemHTML(Object.assign({}, c, { parent_id: Number(f.dataset.parent) })));
+        f.remove();
+        toast('Reply posted 💬', '↩');
+      } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
+    }
+  });
+
   function thumbSrc(v) {
     if (v.store === 'bunny' && v.thumb_url && v.thumb_url.includes('b-cdn')) {
       /* same-origin proxy; ?v=2 busts devices that cached the old hotlink-403 */
@@ -321,7 +525,7 @@
     const p = up.colors;
     const img = v.thumb_url ? '<img loading="lazy" src="' + thumbSrc(v) + '" alt="" onerror="this.style.display=\'none\'">' : '';
     const ghost = v.type === 'short' ? '⚡' : '▶';
-    return '<div class="thumb" style="--c1:' + p[0] + ';--c2:' + p[1] + '">'
+    return '<div class="thumb" data-vid="' + v.id + '" style="--c1:' + p[0] + ';--c2:' + p[1] + '">'
       + img
       + '<span class="thumb-ghost' + (v.thumb_url ? ' small' : '') + '">' + ghost + '</span>'
       + (v.duration && v.type !== 'short' ? '<span class="dur">' + esc(v.duration) + '</span>' : '')
@@ -340,7 +544,7 @@
     const up = upOf(v);
     const liveNow = Number(v.parts) === 0;
     return '<a class="card stream-card" href="' + watchHref(v) + '">'
-      + '<div class="thumb" style="--c1:' + up.colors[0] + ';--c2:' + up.colors[1] + '">'
+      + '<div class="thumb" data-vid="' + v.id + '" style="--c1:' + up.colors[0] + ';--c2:' + up.colors[1] + '">'
       + (v.thumb_url ? '<img loading="lazy" src="' + thumbSrc(v) + '" alt="" onerror="this.style.display=\'none\'">' : '')
       + '<span class="stream-badge' + (liveNow ? ' live' : '') + '">' + (liveNow ? '<span class="live-dot"></span>LIVE' : 'LIVE ENDED') + '</span>'
       + '</div>'
@@ -370,7 +574,7 @@
   function relCardHTML(v) {
     const up = upOf(v);
     return '<a class="compact-card" href="' + watchHref(v) + '">'
-      + '<div class="thumb sm" style="--c1:' + up.colors[0] + ';--c2:' + up.colors[1] + '">'
+      + '<div class="thumb sm" data-vid="' + v.id + '" style="--c1:' + up.colors[0] + ';--c2:' + up.colors[1] + '">'
       + (v.thumb_url ? '<img loading="lazy" src="' + thumbSrc(v) + '" alt="" onerror="this.style.display=\'none\'">' : '')
       + '<span class="thumb-ghost' + (v.thumb_url ? ' small' : '') + '">' + (v.type === 'short' ? '⚡' : '▶') + '</span>'
       + (v.duration ? '<span class="dur">' + esc(v.duration) + '</span>' : '')
@@ -416,9 +620,12 @@
     if (!await ensureVideos()) return;
     try { LIVE_NOW = await api('/api/live'); } catch (e) { LIVE_NOW = []; }
     const cat = q.get('cat') || 'All';
+    const tp = q.get('tp') || 'all';
     const videos = VIDEOS.filter(v => v.type !== 'short' && !isStream(v));
     const shorts = VIDEOS.filter(v => v.type === 'short');
-    const trending = videos.slice().sort((a, b) => viewsOf(b) - viewsOf(a)).slice(0, 4);
+    const tpDays = tp === 'today' ? 1 : tp === 'week' ? 7 : 0;
+    const trendPool = tpDays ? videos.filter(v => Date.now() - Date.parse(v.created_at) < tpDays * 86400000) : videos;
+    const trending = trendPool.slice().sort((a, b) => viewsOf(b) - viewsOf(a)).slice(0, 4);
     const filtered = cat === 'All' ? videos : videos.filter(v => v.category === cat);
     const shortList = cat === 'All' ? shorts : shorts.filter(s => s.category === cat);
 
@@ -426,7 +633,9 @@
       '<div class="chips">' + ['All'].concat(YV.CATS).map(c =>
         '<a class="chip' + (c === cat ? ' on' : '') + '" href="#/home?cat=' + encodeURIComponent(c) + '">' + c + '</a>').join('') + '</div>'
 
-      + (trending.length ? shelf('🔥 Trending Now', trending.map(cardHTML).join('')) : '')
+      + (trending.length ? shelf('<span class="tp-wrap">🔥 Trending <span class="tp-chips">'
+        + [['all', 'All time'], ['today', '⚡ Today'], ['week', '📅 Week']].map(pk => '<a class="chip' + (tp === pk[0] ? ' on' : '') + '" href="#/home?tp=' + pk[0] + (cat !== 'All' ? '&cat=' + encodeURIComponent(cat) : '') + '">' + pk[1] + '</a>').join('')
+        + '</span></span>', trending.map(cardHTML).join('')) : '')
       + (typeof liveShelfHTML === 'function' ? liveShelfHTML() : '')
 
       + (shortList.length ? shelf('⚡ Shorts', shortList.slice(0, 10).map(shortCardHTML).join('')) : '')
@@ -471,7 +680,7 @@
         + '</div>'
         + '<div class="short-rail">'
         + '<div class="rail-item"><button class="rail-btn' + (isLiked(s.id) ? ' on' : '') + '" data-action="like" data-id="' + s.id + '"><span class="ric">' + (isLiked(s.id) ? '❤️' : '🤍') + '</span></button><span class="rail-lbl">' + fmtNum(likesOf(s)) + '</span></div>'
-        + '<div class="rail-item"><a class="rail-btn" href="#/watch/' + s.id + '" title="Comments"><span class="ric">💬</span></a><span class="rail-lbl rail-cnt-c" data-vid="' + s.id + '">…</span></div>'
+        + '<div class="rail-item"><button class="rail-btn" data-action="short-comments" data-id="' + s.id + '" title="Comments"><span class="ric">💬</span></button><span class="rail-lbl rail-cnt-c" data-vid="' + s.id + '">…</span></div>'
         + '<div class="rail-item"><button class="rail-btn" data-action="share" data-id="' + s.id + '"><span class="ric">🔗</span></button><span class="rail-lbl">Share</span></div>'
         + '<div class="rail-item"><button class="rail-btn mute-btn" data-action="mute-shorts"><span class="ric">' + (shortsMuted ? '🔇' : '🔊') + '</span></button><span class="rail-lbl">Sound</span></div>'
         + '</div>'
@@ -562,6 +771,15 @@
     const liked = Object.keys(S.likes).map(byId).filter(Boolean).filter(v => !isStream(v));
     const later = Object.keys(S.later).map(byId).filter(Boolean).filter(v => !isStream(v));
     const mine = VIDEOS.filter(v => v.uploader === myName() && !isStream(v));
+    let playlistsHTML = '';
+    try {
+      const pls = await api('/api/playlists');
+      playlistsHTML = pls.length ? '<div class="pl-list">' + pls.map(pl =>
+        '<div class="pl-row"><b>' + esc(pl.name) + '</b><span class="muted-txt">' + pl.items.length + ' videos</span>'
+        + '<button class="pill-btn" data-pl-play="' + pl.id + '">▶ Play</button>'
+        + '<button class="pill-btn danger" data-pl-del="' + pl.id + '">🗑</button></div>'
+      ).join('') + '</div>' : '';
+    } catch (e) { playlistsHTML = ''; }
     const any = hist.length || liked.length || later.length || mine.length;
 
     main.innerHTML = '<h1 class="page-title">Library</h1>' + (!any
@@ -569,6 +787,7 @@
       : (hist.length ? shelf('🕘 History', hist.map(cardHTML).join(''), '<button class="pill-btn ghost" data-action="clear-history">Clear all</button>') : '')
         + (liked.length ? shelf('❤️ Liked videos', liked.map(cardHTML).join('')) : '')
         + (later.length ? shelf('⏳ Watch later', later.map(cardHTML).join('')) : '')
+        + (playlistsHTML ? shelf('▶ Your playlists', playlistsHTML) : '')
         + (mine.length ? shelf('🎬 Your uploads', mine.map(cardHTML).join(''), '<a class="pill-btn ghost" href="#/channel">Manage</a>') : ''));
   }
 
@@ -624,6 +843,7 @@
     const vids = VIDEOS.filter(v => v.uploader === n && !isStream(v));
     const streams = VIDEOS.filter(v => v.uploader === n && isStream(v));
     const pal = n === S.myChannel.name ? S.myChannel.colors : palFor(n);
+    if (S.auth && S.auth.token && n !== myName()) await loadStreamSubs();
     const rk = rankOf(n);
     main.innerHTML = '<div class="channel-page" data-scope="c"' + (rk ? ' style="--rank:' + rk.hex + '"' : '') + '>'
       + '<div class="banner def" style="--c1:' + pal[0] + ';--c2:' + pal[1] + '"></div>'
@@ -631,6 +851,7 @@
       + '<span class="ch-ava">' + avatarHTML({ name: n, colors: pal, isMe: n === S.myChannel.name }, 96) + '</span>'
       + '<div class="ch-id"><h1 class="ch-name-big rank-name"' + (rankOf(n) ? ' style="color:' + rankOf(n).hex + ';text-shadow:0 0 18px ' + rankOf(n).hex + '66"' : '') + '>' + nameHTML(n) + (rankOf(n) ? ' <span class="rank-chip" style="border-color:' + rankOf(n).hex + ';color:' + rankOf(n).hex + '">' + rankOf(n).label + '</span>' : '') + '</h1>'
       + '<div class="ch-sub">' + fmtNum(subsOfCreator(n)) + ' subscribers · ' + vids.length + ' video' + (vids.length === 1 ? '' : 's') + (streams.length ? ' · ' + streams.length + ' stream' + (streams.length === 1 ? '' : 's') : '') + '</div></div>'
+      + streamBellHTML(n)
       + subBtnHTML(n)
       + '</div>'
       + '<div class="ch-tabs">'
@@ -655,16 +876,40 @@
   }
 
   /* ═══════════ comments (server-side, shared) ═══════════ */
-  function cItemHTML(c) {
+  function cItemHTML(c, replies) {
     const pal = palFor(c.author);
-    return '<div class="c-item">' + avatarHTML({ name: c.author, colors: pal }, 34)
+    const replyHTML = (replies && replies.length ? replies.map(r => {
+      const rp = palFor(r.author);
+      return '<div class="c-item c-reply" data-cid="' + r.id + '">'
+        + '<div class="c-ava-wrap">' + avatarHTML({ name: r.author, colors: rp }, 26) + '</div>'
+        + '<div class="c-body"><div class="c-user">@' + nameHTML(r.author) + ' <span>' + timeAgo(r.created_at ? Date.parse(r.created_at) : Date.now()) + '</span></div>'
+        + '<p>' + esc(r.text) + '</p>'
+        + '<div class="c-actions"><button class="c-like" data-clike="' + r.id + '">❤️ <span class="cl-n">' + (r.likes ? fmtNum(r.likes) : '') + '</span></button></div>'
+        + '</div></div>';
+    }).join('') : '');
+    return '<div class="c-item" data-cid="' + c.id + '">'
+      + '<div class="c-ava-wrap">' + avatarHTML({ name: c.author, colors: pal }, 34) + '</div>'
       + '<div class="c-body"><div class="c-user">@' + nameHTML(c.author) + ' <span>' + timeAgo(c.created_at ? Date.parse(c.created_at) : Date.now()) + '</span></div>'
-      + '<p>' + esc(c.text) + '</p></div></div>';
+      + '<p>' + esc(c.text) + '</p>'
+      + '<div class="c-actions">'
+      + '<button class="c-like" data-clike="' + c.id + '">❤️ <span class="cl-n">' + (c.likes ? fmtNum(c.likes) : '') + '</span></button>'
+      + '<button class="c-reply-btn" data-creply="' + c.id + '" data-cuser="' + esc(c.author) + '">↩ Reply</button>'
+      + '</div>'
+      + '<div class="c-replies" data-for="' + c.id + '">' + replyHTML + '</div>'
+      + '</div></div>';
+  }
+  let curCommentVid = null;
+  function renderCommentTree(list) {
+    const top = list.filter(c => !c.parent_id).slice().sort((a, b) => (b.likes || 0) - (a.likes || 0));
+    const byParent = {};
+    list.filter(c => c.parent_id).forEach(c => { (byParent[c.parent_id] = byParent[c.parent_id] || []).push(c); });
+    return top.length ? top.map(c => cItemHTML(c, byParent[c.id])).join('') : '<p class="muted-txt pad">No comments yet — say something nice ✨</p>';
   }
 
   async function commentsHTML(v) {
     let list = [];
     try { list = await api('/api/videos/' + v.id + '/comments'); } catch (e) { list = []; }
+    curCommentVid = v.id;
     await loadAvatars(list.map(c => c.author)); // real icons in comments too
     return '<section class="comments" id="comments">'
       + '<h2 class="c-head" id="cHead">' + fmtNum(list.length) + ' Comments</h2>'
@@ -672,8 +917,7 @@
       + avatarHTML(meCh(), 36)
       + '<input name="ctext" placeholder="Add a comment…" maxlength="300" required>'
       + '<button class="pill-btn" type="submit">Comment</button></form>'
-      + '<div class="c-list" id="cList">' + (list.length ? list.map(cItemHTML).join('')
-        : '<p class="muted-txt pad">No comments yet — say something nice ✨</p>') + '</div>'
+      + '<div class="c-list" id="cList">' + renderCommentTree(list) + '</div>'
       + '</section>';
   }
 
@@ -736,6 +980,7 @@
       + likeGroupHTML(v)
       + '<button class="act-btn" data-action="share" data-id="' + v.id + '">🔗 Share</button>'
       + '<button class="act-btn' + (S.later[v.id] ? ' on' : '') + '" data-action="later" data-id="' + v.id + '">⏳ Later</button>'
+      + '<button class="act-btn" data-action="pl-add" data-id="' + v.id + '">▶＋ Playlist</button>'
       + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="act-btn danger" data-action="del" data-id="' + v.id + '">🗑 Delete</button>' : '')
       + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="act-btn" data-action="addpoll" data-id="' + v.id + '">📊 Poll</button>' : '')
       + '</div>'
@@ -991,6 +1236,43 @@
 
     const toggle = () => V.paused ? V.play().catch(() => {}) : V.pause();
     big.onclick = toggle; V.onclick = toggle; playB.onclick = toggle;
+    /* playlists: autoplay the next video when this one ends */
+    V.addEventListener('ended', () => {
+      try {
+        if (S.playQueue && S.playQueue.length) {
+          const nx = S.playQueue.shift();
+          YV.store.save();
+          if (nx) { location.hash = '#/watch/' + nx; toast('Next in playlist ▶', '⏭'); }
+        }
+      } catch (e) {}
+    });
+    /* resume watching: continue from the saved position */
+    V.addEventListener('loadedmetadata', () => {
+      try {
+        const vid = V.dataset.vid;
+        const pr = S.progress && S.progress[vid];
+        if (pr && pr.t > 20 && pr.d && pr.t < pr.d * 0.95) {
+          V.currentTime = pr.t;
+          const mm = Math.floor(pr.t / 60), ss = String(Math.floor(pr.t % 60)).padStart(2, '0');
+          toast('Continuing from ' + mm + ':' + ss + ' ⏱', '⏱');
+        }
+      } catch (e) {}
+    });
+    V.addEventListener('timeupdate', () => {
+      try {
+        const vid = V.dataset.vid;
+        if (!vid || !V.duration || !isFinite(V.duration)) return;
+        if (V.currentTime > 20 && V.currentTime < V.duration * 0.95) {
+          S.progress = S.progress || {};
+          S.progress[vid] = { t: Math.floor(V.currentTime), d: Math.floor(V.duration) };
+          clearTimeout(V._pT);
+          V._pT = setTimeout(() => YV.store.save(), 3000);
+        } else if (S.progress && S.progress[vid] && V.currentTime >= V.duration * 0.95) {
+          delete S.progress[vid];
+          YV.store.save();
+        }
+      } catch (e) {}
+    });
     muteB.onclick = () => { V.muted = !V.muted; if (!V.muted && V.volume === 0) { V.volume = .5; vol.value = .5; } };
     vol.oninput = () => { V.volume = +vol.value; V.muted = (+vol.value === 0); };
     full.onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else if (P.requestFullscreen) P.requestFullscreen(); };
@@ -2006,6 +2288,7 @@
       + '<div class="admin-row"><input type="number" id="adminChatRate" min="1" max="60" placeholder="sec between comments"><select id="adminChatLang"><option value="ru">🇷🇺 RU</option><option value="en">🇬🇧 EN</option><option value="mix">🌐 EN+RU</option></select><button class="pill-btn" data-admin="chat-on">💬 Chat ON</button><button class="pill-btn danger" data-admin="chat-off">💬 OFF</button></div>'
       + '<div class="admin-row"><input type="number" id="adminViewersN" value="500" min="1" max="100000"><button class="pill-btn" data-admin="live-viewers-plus">👁 + Зрители</button><button class="pill-btn danger" data-admin="live-viewers-minus">👁 − Зрители</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">± viewers on the CURRENT live stream</span></div>'
+      + '<div class="admin-row"><select id="adminReactE"><option>😂</option><option>❤️</option><option>🔥</option><option>👏</option><option>😮</option><option>💯</option><option>🎉</option><option>👍</option></select><button class="pill-btn" data-admin="react-launch">🎈 Emoji rain</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">clears every notification</span><button class="pill-btn danger" data-admin="notif-clear">🗑 Clear notifications</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">delete notifications one by one</span><button class="pill-btn" data-admin="notif-list">🔔 Notifications list</button></div>'
       + '<div class="admin-row" style="flex-direction:column;align-items:stretch"><div id="adminNotifList" class="adm-sup-list"><span class="muted-txt">Click “Notifications list” to load…</span></div></div>'
@@ -2200,6 +2483,15 @@
       } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
       return;
     }
+    if (kind === 'react-launch') {
+      const e2 = ($('#adminReactE') && $('#adminReactE').value) || '😂';
+      try {
+        const r = await fetch(API_BASE + '/api/admin/live/react', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY }, body: JSON.stringify({ emoji: e2 }) });
+        if (r.status === 404) { toast('No live stream running 📡', '⚠️'); return; }
+        toast('🎈 ' + e2 + ' rain launched on the live stream', '🎈');
+      } catch (e3) { toast('Failed', '⚠️'); }
+      return;
+    }
     if (kind === 'live-viewers-plus' || kind === 'live-viewers-minus') {
       const n = Math.abs(parseInt($('#adminViewersN') && $('#adminViewersN').value, 10) || 0);
       if (!n) { toast('Set a viewers number first', '⚠️'); return; }
@@ -2365,7 +2657,9 @@
       toast('Logged out', '👋');
       location.hash = '#/home';
     }
-    else if (a === 'like') toggleLike(id);
+    else if (a === 'like') { const lr = t.getBoundingClientRect(); spawnHearts(lr.x + lr.width / 2, lr.y + 6); toggleLike(id); }
+    else if (a === 'short-comments') { e.preventDefault(); openShortComments(id); }
+    else if (a === 'pl-add') { e.preventDefault(); plAddFlow(id); }
     else if (a === 'dislike') toggleDislike(id);
     else if (a === 'sub') toggleSub(t.dataset.ch);
     else if (a === 'share') doShare(id);
@@ -2778,6 +3072,7 @@
       + '<div class="chat-panel" id="liveChat">'
       + '<div class="chat-head">💬 Live chat <span class="vrf-badge" title="Verified">✓</span></div>'
       + '<div class="chat-list" id="chatList"></div>'
+      + '<div class="react-row" id="reactRow">' + ['😂', '❤️', '🔥', '👏', '😮', '💯', '🎉', '👍'].map(x => '<button type="button" class="react-emoji" data-e="' + x + '">' + x + '</button>').join('') + '</div>'
       + '<form class="chat-input" id="chatForm"><input id="chatText" maxlength="150" placeholder="Say something…"><button class="pill-btn">➤</button></form>'
       + '</div>'
       + '</div>'
@@ -2821,6 +3116,13 @@
         pollChat();
       } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
     };
+    const reactRow = $('#reactRow');
+    if (reactRow) reactRow.addEventListener('click', e => {
+      const b = e.target.closest('.react-emoji');
+      if (!b) return;
+      api('/api/live/' + id + '/react', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emoji: b.dataset.e, uid: supportName() }) }).catch(() => {});
+      floatEmoji(b.dataset.e);
+    });
 
     /* ── MSE progressive player: the server stores RAW MediaRecorder chunks;
        appending them in order to a MediaSource = ONE continuous gapless webm.
@@ -2828,7 +3130,20 @@
     let plMime = '';
     let lastSegCount = 0;
     let streamOver = false;
+    let lastReactId = 0;
     const segUrls = [];
+    function floatEmoji(e) {
+      const p = $('#livePlayer');
+      if (!p) return;
+      const s = document.createElement('span');
+      s.className = 'live-react';
+      s.textContent = e;
+      s.style.left = (12 + Math.random() * 76) + '%';
+      s.style.setProperty('--dx', (Math.random() * 120 - 60) + 'px');
+      s.style.fontSize = (26 + Math.random() * 20) + 'px';
+      p.appendChild(s);
+      setTimeout(() => s.remove(), 3300);
+    }
     let msRef = null, sbRef = null, mIdx = 0, mQueue = [], mFetching = false, mRetr = 0, seeked = false;
 
     /* stream over → kill playback, freeze the player, show the badge */
@@ -2892,6 +3207,7 @@
         const pl = await api('/api/live/' + id + '/playlist');
         if (pl.status !== 'live') { clearInterval(livePoller); liveOver(); return; }
         if (pl.mime) plMime = pl.mime;
+        (pl.reacts || []).forEach(r => { if (r.id > lastReactId) { lastReactId = r.id; floatEmoji(r.e); } });
         const segs = pl.segs || [];
         if (segs.length > lastSegCount) {
           segUrls.push(...segs.slice(lastSegCount));
