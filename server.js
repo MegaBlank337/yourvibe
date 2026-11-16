@@ -1720,18 +1720,37 @@ async function aiCall(messages) {
   if (DKEY) providers.push({ url: 'https://api.deepseek.com/chat/completions', model: 'deepseek-chat', key: DKEY });
   if (OKEY) providers.push({ url: 'https://openrouter.ai/api/v1/chat/completions', model: 'deepseek/deepseek-chat-v3-0324:free', key: OKEY, extra: { 'HTTP-Referer': 'https://yourvibe-9uqv.onrender.com' } });
   if (GROQ) providers.push({ url: 'https://api.groq.com/openai/v1/chat/completions', model: 'llama-3.3-70b-versatile', key: GROQ });
-  if (GEM) providers.push({ url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: 'gemini-3.8-flash', key: GEM });
+  if (GEM) providers.push({ gemini: 'gemini-3.8-flash', key: GEM });
   if (!providers.length) throw new Error('AI is not configured — add one of: DEEPSEEK_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY in the Render environment');
   let lastErr = 'no provider';
   for (const p of providers) {
-    try {
-      const r = await fetch(p.url, { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + p.key }, p.extra || {}), body: JSON.stringify({ model: p.model, messages, max_tokens: 380, temperature: 0.7 }) });
-      if (!r.ok) { lastErr = p.model + ' http ' + r.status; continue; }
-      const j = await r.json();
-      const out = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
-      if (out.trim()) return out.trim();
-      lastErr = p.model + ' empty response';
-    } catch (e) { lastErr = p.model + ' ' + (e.message || 'error'); }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        let url, headers, body;
+        if (p.gemini) {
+          /* native Gemini API — the OpenAI-compat layer 503s on some regions */
+          const sys = messages.find(m => m.role === 'system');
+          const contents = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+          url = 'https://generativelanguage.googleapis.com/v1beta/models/' + p.gemini + ':generateContent';
+          headers = { 'Content-Type': 'application/json', 'x-goog-api-key': p.key };
+          body = { contents, generationConfig: { maxOutputTokens: 900, temperature: 0.7 } };
+          if (sys) body.system_instruction = { parts: [{ text: sys.content }] };
+          if (attempt === 0) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
+        } else {
+          url = p.url;
+          headers = Object.assign({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + p.key }, p.extra || {});
+          body = { model: p.model, messages, max_tokens: 380, temperature: 0.7 };
+        }
+        const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+        if (!r.ok) { lastErr = (p.model || p.gemini) + ' http ' + r.status + ' ' + (await r.text()).slice(0, 100); continue; }
+        const j = await r.json();
+        let out = '';
+        if (p.gemini) out = ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts || []).map(x => x.text || '').join(''));
+        else out = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+        if (out.trim()) return out.trim();
+        lastErr = (p.model || p.gemini) + ' empty response';
+      } catch (e) { lastErr = (p.model || p.gemini) + ' ' + (e.message || 'error'); }
+    }
   }
   throw new Error(lastErr);
 }
