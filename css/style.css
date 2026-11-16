@@ -1410,3 +1410,64 @@ body.has-ann main { padding-top: 138px; }
   .cards { grid-template-columns: 1fr; }
   .compact-card .thumb.sm { width: 148px; }
 }
+
+
+/* ══════════ v97: previews, hearts, reactions, comments v2, playlists, drawer ══════════ */
+.thumb-prev { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+.float-emoji { position: fixed; z-index: 999; font-size: 22px; pointer-events: none; animation: floatUp 1.5s ease-out forwards; }
+@keyframes floatUp {
+  0% { opacity: 1; transform: translate(-50%, 0) scale(.7); }
+  100% { opacity: 0; transform: translate(calc(-50% + var(--dx, 0px)), -150px) scale(1.4); }
+}
+.react-row { display: flex; gap: 6px; padding: 8px 12px 2px; }
+.react-emoji { flex: 1; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 17px;
+  background: rgba(8, 10, 24, .8); border: 1px solid var(--line); transition: transform .15s, border-color .15s; }
+.react-emoji:hover { transform: scale(1.18); border-color: rgba(0, 229, 255, .6); }
+.live-react { position: absolute; bottom: -6%; z-index: 6; pointer-events: none;
+  animation: reactRise 3.2s ease-out forwards; text-shadow: 0 2px 12px rgba(0, 0, 0, .5); }
+@keyframes reactRise {
+  0% { transform: translateY(0) scale(.6); opacity: 0; }
+  12% { opacity: 1; transform: translateY(-40px) scale(1.15); }
+  100% { transform: translateY(-580px) translateX(var(--dx, 0px)) scale(1); opacity: 0; }
+}
+.c-actions { display: flex; gap: 14px; margin-top: 7px; }
+.c-like, .c-reply-btn { background: none; border: none; color: rgba(232, 236, 255, .65);
+  font-size: 12.5px; cursor: pointer; padding: 0; font-family: inherit; }
+.c-like:hover, .c-reply-btn:hover { color: var(--cyan); }
+.c-like.on { color: #ff5a78; }
+.c-replies { margin-left: 42px; border-left: 2px solid var(--line); padding-left: 12px; margin-top: 9px; }
+.c-item.c-reply { margin-bottom: 9px; }
+.c-mini-form { display: flex; gap: 8px; margin: 8px 0 0 42px; }
+.c-mini-form input { flex: 1; background: rgba(255, 255, 255, .05); border: 1px solid rgba(0, 229, 255, .22);
+  border-radius: 10px; color: var(--txt); padding: 8px 12px; outline: none; }
+.tp-wrap { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.tp-chips { display: inline-flex; gap: 8px; margin-left: 10px; }
+.tp-chips .chip { padding: 4px 12px; font-size: 12px; }
+.pl-list { display: flex; flex-direction: column; gap: 8px; }
+.pl-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+  background: rgba(10, 12, 28, .85); border: 1px solid var(--line); border-radius: 12px; }
+.pl-row b { flex: 1; }
+#plModal { position: fixed; inset: 0; z-index: 420; display: grid; place-items: center; background: rgba(0, 0, 0, .55); }
+.stream-bell { margin-right: 8px; }
+/* TikTok-style shorts comments drawer */
+.sc-drawer-wrap { position: fixed; inset: 0; z-index: 300; }
+.scd-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .55); }
+.scd { position: absolute; top: 0; right: 0; bottom: 0; width: min(380px, 92vw);
+  display: flex; flex-direction: column;
+  background: rgba(8, 10, 24, .98);
+  border-left: 1px solid rgba(0, 229, 255, .4);
+  box-shadow: -20px 0 60px rgba(0, 0, 0, .5);
+  animation: scdIn .22s ease both; }
+@keyframes scdIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.scd-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px;
+  font-family: 'Orbitron', sans-serif; font-size: 12px; letter-spacing: 1.5px;
+  color: var(--cyan); border-bottom: 1px solid var(--line); }
+.scd-close { background: none; border: none; color: var(--txt); font-size: 16px; cursor: pointer; }
+.scd-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+.scd-item { display: flex; gap: 10px; padding: 10px 14px; border-bottom: 1px solid rgba(255, 255, 255, .04); }
+.scd-name { font-size: 12.5px; font-weight: 700; margin-bottom: 2px; }
+.scd-txt { font-size: 14px; line-height: 1.4; word-break: break-word; }
+.scd-time { font-size: 11px; color: rgba(232, 236, 255, .4); margin-top: 3px; }
+.scd-form { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
+.scd-form input { flex: 1; background: rgba(255, 255, 255, .05); border: 1px solid rgba(0, 229, 255, .22);
+  border-radius: 12px; color: var(--txt); padding: 10px 14px; outline: none; font-family: inherit; }
