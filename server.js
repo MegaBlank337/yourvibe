@@ -1720,7 +1720,7 @@ async function aiCall(messages) {
   if (DKEY) providers.push({ url: 'https://api.deepseek.com/chat/completions', model: 'deepseek-chat', key: DKEY });
   if (OKEY) providers.push({ url: 'https://openrouter.ai/api/v1/chat/completions', model: 'deepseek/deepseek-chat-v3-0324:free', key: OKEY, extra: { 'HTTP-Referer': 'https://yourvibe-9uqv.onrender.com' } });
   if (GROQ) providers.push({ url: 'https://api.groq.com/openai/v1/chat/completions', model: 'llama-3.3-70b-versatile', key: GROQ });
-  if (GEM) providers.push({ url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: 'gemini-2.0-flash', key: GEM });
+  if (GEM) providers.push({ url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: 'gemini-3.8-flash', key: GEM });
   if (!providers.length) throw new Error('AI is not configured — add one of: DEEPSEEK_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY in the Render environment');
   let lastErr = 'no provider';
   for (const p of providers) {
