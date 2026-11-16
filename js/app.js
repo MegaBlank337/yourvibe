@@ -1931,6 +1931,9 @@
   function supportName() { return myName() || ('guest-' + voterTag()); }
   function helpMsgHTML(m) {
     const when = m.created_at ? timeAgo(Date.parse(m.created_at)) : '';
+    if (m.ai) {
+      return '<div class="help-msg admin ai"><div class="help-who">🤖 YourVibe <span class="ai-badge">AI</span></div><div class="help-txt">' + esc(m.text) + '</div><div class="help-time">' + when + '</div></div>';
+    }
     if (m.from_admin) {
       return '<div class="help-msg admin"><div class="help-who">▶ YourVibe <span class="vrf-badge" title="Verified">✓</span></div><div class="help-txt">' + esc(m.text) + '</div><div class="help-time">' + when + '</div></div>';
     }
@@ -1975,6 +1978,7 @@
     try {
       await api('/api/support', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: supportName(), text }) });
       pollHelp();
+      setTimeout(pollHelp, 3000); setTimeout(pollHelp, 6000); setTimeout(pollHelp, 10000);
     } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
   };
   setInterval(pollHelp, 8000);
@@ -2293,6 +2297,8 @@
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">delete notifications one by one</span><button class="pill-btn" data-admin="notif-list">🔔 Notifications list</button></div>'
       + '<div class="admin-row" style="flex-direction:column;align-items:stretch"><div id="adminNotifList" class="adm-sup-list"><span class="muted-txt">Click “Notifications list” to load…</span></div></div>'
       + '<div class="admin-row span2"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">user problems arrive here as tickets — click one to open</span><button class="pill-btn" data-admin="support-open">📨 Load tickets</button></div>'
+      + '<div class="admin-row span2"><input type="text" id="adminAiTopic" maxlength="120" placeholder="topic for AI (optional — e.g. live features)"><button class="pill-btn" data-admin="ai-ideas">🤖 AI ideas</button></div>'
+      + '<div class="admin-row span2" style="flex-direction:column;align-items:stretch"><div id="adminAiOut" class="adm-sup-list"><span class="muted-txt">Click “🤖 AI ideas” — the AI will suggest what to build next</span></div></div>'
       + '<div class="span2" id="adminSupportRow">'
       + '<div id="adminTickets" class="adm-tickets"><span class="muted-txt">Click “Load tickets”…</span></div>'
       + '<div id="adminThreadView" class="hide">'
@@ -2384,6 +2390,8 @@
     return list.slice().reverse().map(m =>
       '<div class="adm-sup">' + (m.from_admin
         ? '<b style="color:#39ff88">↩ admin</b>: '
+        : m.ai
+        ? '<b style="color:#7c9cff">🤖 AI</b>: '
         : '<b>' + esc(m.username) + '</b>: ')
       + esc(m.text) + ' <span class="muted-txt">· ' + (m.created_at ? timeAgo(Date.parse(m.created_at)) : '') + '</span></div>'
     ).join('');
@@ -2481,6 +2489,21 @@
         });
         toast(enabled ? 'Fake live chat ON — ' + ({ ru: '🇷🇺 RU', en: '🇬🇧 EN', mix: '🌐 EN+RU' }[lang] || lang) + ' — 1 comment / ' + r.rateSec + 's 💬' : 'Fake live chat OFF', '💬');
       } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
+      return;
+    }
+    if (kind === 'ai-ideas') {
+      const topic = ($('#adminAiTopic') && $('#adminAiTopic').value || '').trim();
+      const out = $('#adminAiOut');
+      if (out) out.innerHTML = '<span class="muted-txt">🤖 Thinking…</span>';
+      try {
+        const r = await fetch(API_BASE + '/api/admin/ai/ideas', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY }, body: JSON.stringify({ topic }) });
+        const j = await r.json();
+        if (out) out.innerHTML = j.text ? '<div class="ai-ideas">' + esc(j.text).replace(/\n/g, '<br>') + '</div>' : '<span class="muted-txt">AI returned nothing</span>';
+      } catch (e2) {
+        const msg = e2.message || 'failed';
+        if (out) out.innerHTML = '<span class="muted-txt">🤖 AI error: ' + esc(msg) + '</span>';
+        toast('AI error — check the API key/balance', '⚠️');
+      }
       return;
     }
     if (kind === 'react-launch') {
