@@ -222,9 +222,18 @@
   const subsOfCreator = name => Number(CREATORS[name]) || 0;
   const agoOf = v => timeAgo(v.created_at ? Date.parse(v.created_at) : 0);
   /* thumbnails: bunny-cdn thumbs are hotlink-protected — proxy them same-origin */
+  /* thumbnails: one cache-busted retry, then hide gracefully */
+  document.addEventListener('error', e => {
+    const im = e.target;
+    if (!im || im.tagName !== 'IMG' || !im.src || !im.src.includes('/api/thumb/')) return;
+    if (!im.dataset.re) { im.dataset.re = '1'; im.src = im.src.split('?')[0] + '?r=' + Date.now(); return; }
+    im.style.display = 'none';
+  }, true);
+
   function thumbSrc(v) {
     if (v.store === 'bunny' && v.thumb_url && v.thumb_url.includes('b-cdn')) {
-      return API_BASE + '/api/thumb/' + v.id;
+      /* same-origin proxy; ?v=2 busts devices that cached the old hotlink-403 */
+      return API_BASE + '/api/thumb/' + v.id + '?v=2';
     }
     return v.thumb_url || '';
   }
@@ -830,7 +839,7 @@
           };
           ms.addEventListener('sourceopen', () => {
             try { sb = ms.addSourceBuffer(vmime); } catch (e) { vodSeq(); return; }
-            sb.mode = 'sequence';
+            sb.mode = 'segments'; // native timestamps — VOD A/V stays in sync
             sb.addEventListener('error', vodSeq);
             step();
           });
@@ -2865,7 +2874,7 @@
       v.src = URL.createObjectURL(msRef);
       msRef.addEventListener('sourceopen', () => {
         try { sbRef = msRef.addSourceBuffer(mime); } catch (e) { if (statusEl) statusEl.textContent = 'Playback error ⚠️'; return; }
-        sbRef.mode = 'sequence';
+        sbRef.mode = 'segments'; // native timestamps — audio stays in sync with video
         sbRef.addEventListener('updateend', stepMse);
         stepMse();
       });
