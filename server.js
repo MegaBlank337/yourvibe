@@ -1188,11 +1188,12 @@ app.get('/api/playlists', async (req, res) => {
     const r = await q('select id, name, created_at from playlists where owner = $1 order by id desc limit 100', [authName]);
     const out = [];
     for (const pl of r.rows) {
-      const items = await q('select video_id from playlist_items where playlist_id = $1 order by ord asc, id asc', [pl.id]);
+      let items = [];
+      try { items = await q('select video_id from playlist_items where playlist_id = $1 order by ord asc, id asc', [pl.id]); } catch (e2) { console.error('playlist items:', e2.message); }
       out.push({ id: pl.id, name: pl.name, created_at: pl.created_at, items: items.map(x => x.video_id) });
     }
     res.json(out);
-  } catch (e) { res.json([]); }
+  } catch (e) { console.error('playlists GET:', e.message); res.status(500).json({ error: String(e.message) }); }
 });
 
 app.post('/api/playlists', async (req, res) => {
