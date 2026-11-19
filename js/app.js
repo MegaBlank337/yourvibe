@@ -315,6 +315,37 @@
     };
   }
 
+  /* ── subtitles editor (owner) — lines "0:05 text" ── */
+  function subsEditor(id) {
+    const meta = byId(id) || {};
+    const rows = Array.isArray(meta.subtitles) ? meta.subtitles.slice() : [];
+    const ta = rows.map(s => fmtT(s.t) + ' ' + (s.text || '')).join('\n');
+    let d = document.getElementById('subsModal');
+    if (d) d.remove();
+    d = document.createElement('div');
+    d.id = 'subsModal';
+    d.innerHTML = '<div class="admin-box"><div class="admin-head"><span>📝 Subtitles</span><button class="admin-close" id="subsClose">✕</button></div>'
+      + '<div style="padding:16px;display:flex;flex-direction:column;gap:10px">'
+      + '<p class="muted-txt">One line per subtitle — <b>0:05 текст</b> (shown for 4s). Auto-subs from a live recording appear here too.</p>'
+      + '<textarea id="subsTa" rows="10" style="background:rgba(0,0,0,.3);border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:10px;font-family:inherit">' + esc(ta) + '</textarea>'
+      + '<button class="pill-btn" id="subsSave">💾 Save subtitles</button>'
+      + '</div></div>';
+    document.body.appendChild(d);
+    d.querySelector('#subsClose').onclick = () => d.remove();
+    d.querySelector('#subsSave').onclick = async () => {
+      const rows2 = String(d.querySelector('#subsTa').value || '').split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+        const m = l.match(/^(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\s+(.{1,160})$/);
+        return m ? { t: (+((m[1] || 0)) * 60) + (+m[2]) * 60 + (+m[3]), text: m[4] } : null;
+      }).filter(Boolean).sort((a, b) => a.t - b.t);
+      try {
+        await api('/api/videos/' + id + '/subs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subs: rows2 }) });
+        meta.subtitles = rows2;
+        toast('Subtitles saved 📝', '✅');
+        d.remove();
+      } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
+    };
+  }
+
   /* ── add-to-playlist modal (watch page) ── */
   async function plAddFlow(videoId) {
     let pls = [];
@@ -844,6 +875,53 @@
         : '<p class="muted-txt pad">No uploads from these creators yet.</p>');
   }
 
+  /* ═══════════ VIEW: GUEST CO-HOST ═══════════ */
+  async function viewGuest(id) {
+    const t = (location.hash.split('?t=')[1] || '').trim();
+    main.innerHTML = '<div class="page up-page"><h1 class="page-title">👥 Co-host camera</h1>'
+      + '<p class="muted-txt">Your camera will stream into the live broadcast as a small window 📺</p>'
+      + '<div class="up-preview" style="max-width:560px"><video id="gVid" autoplay muted playsinline></video></div>'
+      + '<div class="form-err" id="gErr"></div>'
+      + '<button class="btn-neon" id="gStart">🎥 Start camera</button>'
+      + '<button class="btn-neon danger hide" id="gStop">⏹ Stop</button></div>';
+    let stream = null, running = false, i = 0;
+    document.getElementById('gStart').onclick = async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640 }, audio: true });
+        document.getElementById('gVid').srcObject = stream;
+        document.getElementById('gStart').classList.add('hide');
+        document.getElementById('gStop').classList.remove('hide');
+        running = true; i = 0;
+        toast('You are LIVE as co-host 👥', '🔴');
+        (async () => {
+          while (running) {
+            const sr = await fetch(API_BASE + '/api/live/' + id + '/guest-sign?token=' + encodeURIComponent(t) + '&i=' + i, { headers: { Accept: 'application/json' } }).then(r => r.json()).catch(() => null);
+            if (!sr || !sr.upload) { document.getElementById('gErr').textContent = '⚠️ Stream offline — stopped'; return; }
+            await new Promise(res => {
+              const rr = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8,opus' });
+              rr.ondataavailable = async e => {
+                if (!e.data || !e.data.size) return;
+                try { await fetch(sr.upload, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: e.data }); i++; } catch (e2) {}
+              };
+              rr.onstop = res;
+              rr.start(3000);
+              setTimeout(() => { try { if (rr.state !== 'inactive') rr.stop(); } catch (e3) {} }, 3200);
+            });
+          }
+        })();
+      } catch (e) {
+        document.getElementById('gErr').textContent = '⚠️ ' + (e.message || e.name);
+      }
+    };
+    document.getElementById('gStop').onclick = () => {
+      running = false;
+      if (stream) stream.getTracks().forEach(tr => tr.stop());
+      document.getElementById('gStop').classList.add('hide');
+      document.getElementById('gStart').classList.remove('hide');
+      toast('Co-host stopped', '⏹');
+    };
+  }
+
   /* ═══════════ VIEW: TAG ═══════════ */
   async function viewTag(name) {
     if (!await ensureVideos()) return;
@@ -855,6 +933,98 @@
       + (res.length
         ? '<div class="cards">' + res.map(cardHTML).join('') + '</div>'
         : emptyHTML('🏷️', 'Nothing tagged #' + esc(tag), 'Be the first to use this hashtag in a title or description!', '<a class="btn-neon" href="#/upload">＋ Upload</a>'));
+  }
+
+  /* ── direct messages ── */
+  async function pollDmBadge() {
+    if (!(S.auth && S.auth.token)) return [];
+    try {
+      const inbox = await api('/api/dm/inbox');
+      const unread = inbox.reduce((a, x) => a + (x.unread || 0), 0);
+      const cnt = document.getElementById('dmCount');
+      if (cnt) { cnt.textContent = unread || ''; cnt.style.display = unread ? 'grid' : 'none'; }
+      return inbox;
+    } catch (e) { return []; }
+  }
+  async function openDmPanel() {
+    const panel = document.getElementById('dmPanel');
+    if (!panel) return;
+    panel.classList.toggle('hide');
+    if (panel.classList.contains('hide')) return;
+    const help = document.getElementById('helpPanel');
+    const np = document.getElementById('notifPanel');
+    if (help) help.classList.add('hide');
+    if (np) np.classList.add('hide');
+    const body = document.getElementById('dmBody');
+    if (!(S.auth && S.auth.token)) { body.innerHTML = '<p class="muted-txt" style="padding:16px">Log in to use messages 🔒</p>'; return; }
+    const inbox = await pollDmBadge();
+    body.innerHTML = '<div class="dm-list">'
+      + (inbox.length ? inbox.map(x =>
+        '<div class="dm-peer" data-peer="' + esc(x.peer) + '"><div class="dm-pcol"><b>@' + esc(x.peer) + '</b><span class="dm-last">' + esc(String(x.last_text || '').slice(0, 42)) + '</span></div>' + (x.unread ? '<span class="dm-unread">' + x.unread + '</span>' : '') + '</div>'
+      ).join('') : '<p class="muted-txt" style="padding:14px;text-align:center">No conversations yet — open a channel and press ✉ Message</p>')
+      + '</div>';
+    body.querySelectorAll('.dm-peer').forEach(el => el.onclick = () => openDmThread(el.dataset.peer));
+  }
+  async function openDmThread(peer) {
+    const panel = document.getElementById('dmPanel');
+    const body = document.getElementById('dmBody');
+    if (!panel || !body) return;
+    panel.classList.remove('hide');
+    body.innerHTML = '<div class="dm-thread"><div class="dm-thead">↩ <b>@' + esc(peer) + '</b></div><div class="dm-msgs" id="dmMsgs"><p class="muted-txt" style="padding:10px">Loading…</p></div>'
+      + '<form class="dm-form" id="dmForm"><input id="dmText" maxlength="1000" placeholder="Message…"><button class="pill-btn" type="submit">➤</button></form></div>';
+    body.querySelector('.dm-thead').onclick = () => openDmPanel();
+    const msgs = document.getElementById('dmMsgs');
+    const load = async () => {
+      const list = await api('/api/dm/' + encodeURIComponent(peer)).catch(() => []);
+      msgs.innerHTML = list.length ? list.map(m =>
+        '<div class="dm-msg' + (m.from_u === myName() ? ' mine' : '') + '"><div class="dm-txt">' + esc(m.text) + '</div><div class="dm-time">' + timeAgo(Date.parse(m.created_at)) + '</div></div>'
+      ).join('') : '<p class="muted-txt" style="padding:10px">No messages yet — say hi 👋</p>';
+      msgs.scrollTop = msgs.scrollHeight;
+    };
+    await load();
+    await api('/api/dm/' + encodeURIComponent(peer) + '/read', { method: 'POST', headers: { 'Content-Type': 'application/json' } }).catch(() => {});
+    pollDmBadge();
+    const f = document.getElementById('dmForm');
+    f.onsubmit = async e2 => {
+      e2.preventDefault();
+      const inp = document.getElementById('dmText');
+      const text = (inp.value || '').trim();
+      if (!text) return;
+      inp.value = '';
+      try {
+        await api('/api/dm/' + encodeURIComponent(peer), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+        await load();
+        pollDmBadge();
+      } catch (e3) { toast(e3.message || 'failed', '⚠️'); }
+    };
+  }
+  setInterval(pollDmBadge, 15000);
+
+  /* ── stream schedule (channel page) ── */
+  async function renderSchedule(n, isOwner) {
+    const box = document.getElementById('schedSec');
+    if (!box) return;
+    let rows = [];
+    try { rows = await api('/api/schedule/' + encodeURIComponent(n)); } catch (e) {}
+    const now = Date.now();
+    const items = rows.filter(r3 => new Date(r3.when).getTime() > now - 1800000);
+    box.innerHTML = '<div class="sched-head">📅 Stream schedule</div>'
+      + (items.length ? items.map(r4 => '<div class="sched-row"><b>' + esc(r4.title) + '</b><span class="muted-txt">' + new Date(r4.when).toLocaleString('ru-RU') + '</span>' + (isOwner ? '<button class="pill-btn danger" data-sched-del="' + r4.id + '">🗑</button>' : '') + '</div>').join('') : '<div class="muted-txt">No scheduled streams yet</div>')
+      + (isOwner ? '<div class="sched-add"><input id="schedTitle" maxlength="100" placeholder="Stream title"><input type="datetime-local" id="schedWhen"><button class="pill-btn" data-sched-add>＋ Add</button></div>' : '');
+    const addB = box.querySelector('[data-sched-add]');
+    if (addB) addB.onclick = async () => {
+      const title = box.querySelector('#schedTitle').value.trim();
+      const when = box.querySelector('#schedWhen').value;
+      if (!title || !when) { toast('Title + date needed', '📅'); return; }
+      try {
+        await api('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, when: new Date(when).toISOString() }) });
+        toast('Scheduled 📅', '✅');
+        renderSchedule(n, isOwner);
+      } catch (e) { toast(e.message || 'failed', '⚠️'); }
+    };
+    box.querySelectorAll('[data-sched-del]').forEach(b => b.onclick = async () => {
+      try { await api('/api/schedule/' + b.dataset.schedDel, { method: 'DELETE' }); renderSchedule(n, isOwner); } catch (e) {}
+    });
   }
 
   /* ═══════════ VIEW: LIBRARY ═══════════ */
@@ -888,7 +1058,7 @@
   async function viewMyChannel() {
     if (!await ensureVideos()) return;
     const c = S.myChannel;
-    const mine = VIDEOS.filter(v => v.uploader === myName() && !isStream(v));
+    const mine = VIDEOS.filter(v => (v.uploader === myName() || (v.collabs || []).includes(myName())) && !isStream(v));
     const streams = VIDEOS.filter(v => v.uploader === myName() && isStream(v));
     const totalViews = mine.reduce((a, v) => a + (v.views || 0), 0);
     const totalLikes = mine.reduce((a, v) => a + likesOf(v), 0);
@@ -903,6 +1073,8 @@
       + '<div class="ch-actions">' + socialHTML(S.myChannel.links) + '<a class="btn-neon" href="#/upload">＋ Upload</a>'
       + '<a class="pill-btn ghost" href="#/settings">⚙ Customize channel</a></div>'
       + '</div>'
+      + '<div class="sched-sec" id="schedSec"></div>'
+      + '<div class="sched-sec" id="schedSec"></div>'
       + '<div class="ch-tabs">'
       + '<button class="tab-btn on" data-action="tab" data-tab="vids">🎬 Videos</button>'
       + (streams.length ? '<button class="tab-btn" data-action="tab" data-tab="streams">🔴 Streams <span class="tab-count">' + streams.length + '</span></button>' : '')
@@ -927,13 +1099,14 @@
       + '</div></div>'
       + '</div>';
     fillStreamCounts();
+    renderSchedule(myName(), true);
   }
 
   /* ═══════════ VIEW: CREATOR CHANNEL ═══════════ */
   async function viewChannel(name) {
     if (!await ensureVideos()) return;
     const n = decodeURIComponent(name);
-    const vids = VIDEOS.filter(v => v.uploader === n && !isStream(v));
+    const vids = VIDEOS.filter(v => (v.uploader === n || (v.collabs || []).includes(n)) && !isStream(v));
     const streams = VIDEOS.filter(v => v.uploader === n && isStream(v));
     let chLinks = null;
     if (S.auth && S.auth.token ? n !== myName() : true) { try { chLinks = (await api('/api/channels/' + encodeURIComponent(n) + '/links')).links; } catch (e) {} }
@@ -947,6 +1120,7 @@
       + '<div class="ch-id"><h1 class="ch-name-big rank-name"' + (rankOf(n) ? ' style="color:' + rankOf(n).hex + ';text-shadow:0 0 18px ' + rankOf(n).hex + '66"' : '') + '>' + nameHTML(n) + (rankOf(n) ? ' <span class="rank-chip" style="border-color:' + rankOf(n).hex + ';color:' + rankOf(n).hex + '">' + rankOf(n).label + '</span>' : '') + '</h1>'
       + '<div class="ch-sub">' + fmtNum(subsOfCreator(n)) + ' subscribers · ' + vids.length + ' video' + (vids.length === 1 ? '' : 's') + (streams.length ? ' · ' + streams.length + ' stream' + (streams.length === 1 ? '' : 's') : '') + '</div></div>'
       + socialHTML(chLinks)
+      + ((S.auth && S.auth.token && n !== myName()) ? '<button class="pill-btn ghost" data-action="dm-open" data-ch="' + esc(n) + '">✉ Message</button>' : '')
       + streamBellHTML(n)
       + subBtnHTML(n)
       + '</div>'
@@ -969,6 +1143,7 @@
       + '</div></div>'
       + '</div>';
     fillStreamCounts();
+    renderSchedule(n, n === myName());
   }
 
   /* ═══════════ comments (server-side, shared) ═══════════ */
@@ -1070,6 +1245,7 @@
       + '<div class="watch-main">'
       + playerHTML(v)
       + '<h1 class="w-title">' + esc(v.title) + '</h1>'
+      + (Array.isArray(v.collabs) && v.collabs.length ? '<div class="collab-row">👥 ' + v.collabs.map(c2 => nameHTML(c2)).join(', ') + '</div>' : '')
       + '<div class="w-row">'
       + '<a class="ch-link" href="#/c/' + encodeURIComponent(v.uploader) + '">' + avatarHTML(up, 42)
       + '<div><div class="wl-name">' + nameHTML(v.uploader) + '</div>'
@@ -1081,6 +1257,8 @@
       + '<button class="act-btn' + (S.later[v.id] ? ' on' : '') + '" data-action="later" data-id="' + v.id + '">⏳ Later</button>'
       + '<button class="act-btn" data-action="pl-add" data-id="' + v.id + '">▶＋ Playlist</button>'
       + ((S.auth && S.auth.username === v.uploader) ? '<a class="act-btn" href="' + srcOf(v) + '" download="yourvibe-' + v.id.slice(0, 8) + '" title="Download your video">⬇ Download</a>' : '')
+      + ((S.auth && S.auth.username === v.uploader) ? '<button class="act-btn" data-action="subs-edit" data-id="' + v.id + '">📝 Subs</button>' : '')
+      + ((S.auth && S.auth.username === v.uploader) ? '<button class="act-btn" data-action="collab-add" data-id="' + v.id + '">👥＋ Collab</button>' : '')
       + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="act-btn danger" data-action="del" data-id="' + v.id + '">🗑 Delete</button>' : '')
       + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="act-btn" data-action="addpoll" data-id="' + v.id + '">📊 Poll</button>' : '')
       + '</div>'
@@ -1175,6 +1353,28 @@
               if (!fetching && qi >= segs.length) {
                 try { if (ms.readyState === 'open') ms.endOfStream(); } catch (e) {}
                 if (segLabel) segLabel.textContent = 'VOD · ' + segs.length + ' parts';
+                /* subtitles overlay for the stream VOD */
+                try {
+                  if (Array.isArray(v.subtitles) && v.subtitles.length) {
+                    const ccB = document.createElement('button');
+                    ccB.className = 'ctl-btn'; ccB.textContent = 'CC';
+                    const crow = document.querySelector('#yvPlayer .ctl-row');
+                    if (crow && crow.querySelector('#yvFull')) crow.insertBefore(ccB, crow.querySelector('#yvFull'));
+                    const ov = document.createElement('div');
+                    ov.className = 'cc-overlay hide';
+                    const pl = document.querySelector('#yvPlayer');
+                    if (pl) pl.appendChild(ov);
+                    let ccOn = false;
+                    ccB.onclick = () => { ccOn = !ccOn; ccB.classList.toggle('on', ccOn); if (!ccOn) ov.classList.add('hide'); };
+                    nv.addEventListener('timeupdate', () => {
+                      if (!ccOn) return;
+                      const tt = nv.currentTime;
+                      const cur = v.subtitles.filter(s4 => tt >= s4.t && tt < s4.t + (s4.d || 4)).pop();
+                      ov.textContent = cur ? cur.text : '';
+                      ov.classList.toggle('hide', !cur);
+                    });
+                  }
+                } catch (x) {}
               }
               return;
             }
@@ -1359,6 +1559,51 @@
       let fi = 0;
       flt.onclick = () => { fi = (fi + 1) % PRESETS.length; V.style.filter = PRESETS[fi][0]; flt.title = 'Filter: ' + PRESETS[fi][1]; toast('Filter: ' + PRESETS[fi][1], '🎨'); };
     }
+    /* trim + background music + subtitles */
+    try {
+      const meta2 = byId(V.dataset.vid) || {};
+      V.addEventListener('loadedmetadata', () => {
+        try {
+          if (meta2.trim_start && V.currentTime < meta2.trim_start) V.currentTime = meta2.trim_start;
+          if (meta2.music_url && !V._mus) {
+            const au = document.createElement('audio');
+            au.src = meta2.music_url; au.loop = true;
+            au.volume = Math.min(1, (V.volume || 1) * 0.9);
+            V._mus = au;
+            const syncM = () => { if (!V.paused) au.play().catch(() => {}); else au.pause(); try { au.currentTime = V.currentTime % (au.duration || 1e9); } catch (x) {} };
+            V.addEventListener('play', syncM);
+            V.addEventListener('pause', () => au.pause());
+            V.addEventListener('seeked', syncM);
+            V.addEventListener('volumechange', () => { au.volume = Math.min(1, (V.volume || 1) * 0.9); au.muted = V.muted; });
+          }
+        } catch (x) {}
+      });
+      V.addEventListener('timeupdate', () => {
+        try {
+          if (meta2.trim_end && V.currentTime >= meta2.trim_end) V.pause();
+          if (meta2.trim_start && V.currentTime < meta2.trim_start - 0.5 && V.currentTime < 1) V.currentTime = meta2.trim_start;
+        } catch (x) {}
+      });
+      if (Array.isArray(meta2.subtitles) && meta2.subtitles.length) {
+        const ccB = document.createElement('button');
+        ccB.className = 'ctl-btn'; ccB.textContent = 'CC'; ccB.title = 'Subtitles';
+        const crow = document.querySelector('#yvPlayer .ctl-row');
+        if (crow && crow.querySelector('#yvFull')) crow.insertBefore(ccB, crow.querySelector('#yvFull'));
+        const ov = document.createElement('div');
+        ov.className = 'cc-overlay hide';
+        const pl = document.querySelector('#yvPlayer');
+        if (pl) pl.appendChild(ov);
+        let ccOn = false;
+        ccB.onclick = () => { ccOn = !ccOn; ccB.classList.toggle('on', ccOn); if (!ccOn) ov.classList.add('hide'); };
+        V.addEventListener('timeupdate', () => {
+          if (!ccOn) return;
+          const tt = V.currentTime;
+          const cur = meta2.subtitles.filter(s3 => tt >= s3.t && tt < s3.t + (s3.d || 4)).pop();
+          ov.textContent = cur ? cur.text : '';
+          ov.classList.toggle('hide', !cur);
+        });
+      }
+    } catch (x) {}
     /* playlists: autoplay the next video when this one ends */
     V.addEventListener('ended', () => {
       try {
@@ -1529,6 +1774,14 @@
       + '<input type="file" id="thIn" accept="image/*" hidden>'
       + '<span class="muted-txt" id="thMsg">optional — auto-captured from the video if empty</span>'
       + '</div><div class="thumb-preview hide" id="thPrev"></div></div>'
+      + '<div class="field"><label>✂ Trim (optional, seconds)</label><div class="field-row">'
+      + '<input type="number" id="upTrimA" min="0" max="7200" placeholder="start">'
+      + '<input type="number" id="upTrimB" min="0" max="7200" placeholder="end">'
+      + '</div><p class="muted-txt" id="trimHint">viewers watch only this range — leave empty for the full video</p></div>'
+      + '<div class="field"><label>🎵 Background music (optional)</label><div class="file-row">'
+      + '<button type="button" class="pill-btn ghost" id="musBtn">🎵 Choose audio</button>'
+      + '<input type="file" id="musIn" accept="audio/*" hidden>'
+      + '<span class="muted-txt" id="musMsg">loops under the video</span></div></div>'
       + '<div class="up-preview hide" id="upPrev"><video id="prevVid" controls muted playsinline></video><div class="up-meta" id="upMeta"></div></div>'
       + '<div class="progress-wrap hide" id="upProg"><div class="progress-label" id="upProgLbl">Uploading…</div><div class="progress-bar"><div class="progress-fill" id="upProgFill"></div></div></div>'
       + '<div class="form-err" id="upErr"></div>'
@@ -1541,6 +1794,8 @@
       thIn = $('#thIn'), thBtn = $('#thBtn'), thMsg = $('#thMsg'), thPrev = $('#thPrev');
 
     let file = null, objUrl = null, dur = 0, thumbData = null, thumbFile = null;
+    let musFile = null;
+    const musBtn = document.getElementById('musBtn'), musIn = document.getElementById('musIn'), musMsg = document.getElementById('musMsg');
 
     const err = m => { upErr.textContent = m || ''; };
 
@@ -1574,8 +1829,9 @@
           thPrev.innerHTML = '<img src="' + th + '" alt="thumbnail preview">';
           thMsg.textContent = 'auto-captured from your video — or pick your own above';
         }
-        upMeta.textContent = (dur ? '⏱ Duration ' + fmtDur(dur) : '')
-          + ' · ready to publish ✨';
+        upMeta.textContent = (dur ? '⏱ Duration ' + fmtDur(dur) : '') + ' · ready to publish ✨';
+        const trimH = document.getElementById('trimHint');
+        if (trimH && dur) trimH.textContent = '⏱ duration ' + fmtDur(dur) + ' — enter start/end in seconds (empty = full video)';
         publish.disabled = false;
       });
     }
@@ -1593,6 +1849,26 @@
       thPrev.classList.remove('hide');
       thPrev.innerHTML = '<img src="' + data + '" alt="thumbnail preview">';
       thMsg.textContent = '✅ custom thumbnail set';
+    });
+    const bgSel = document.getElementById('bgSel'), bgImgIn = document.getElementById('bgImg'), bgHint = document.getElementById('bgHint');
+    window._bgImg = null;
+    bgSel.addEventListener('change', () => {
+      if (bgSel.value === 'i') bgImgIn.click();
+      else { window._bgImg = null; bgHint.textContent = 'backdrop: ' + (bgSel.value || 'none'); }
+    });
+    bgImgIn.addEventListener('change', () => {
+      const f = bgImgIn.files[0];
+      if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => { const im = new Image(); im.onload = () => { window._bgImg = im; bgHint.textContent = '🖼 backdrop image ready'; }; im.src = rd.result; };
+      rd.readAsDataURL(f);
+      bgSel.value = 'i';
+    });
+    musIn.addEventListener('change', () => {
+      const f = musIn.files[0];
+      if (!f) { musFile = null; musMsg.textContent = 'loops under the video'; return; }
+      musFile = f;
+      musMsg.textContent = '✅ ' + f.name.slice(0, 28) + ' — will loop under the video';
     });
 
     /* XHR wrapper with real upload progress */
@@ -1669,7 +1945,10 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  guid: vj.guid, title,
+                  guid: vj.guid,
+                  trimStart: Math.max(0, parseInt((document.getElementById('upTrimA') || {}).value, 10) || 0),
+                  trimEnd: Math.max(0, parseInt((document.getElementById('upTrimB') || {}).value, 10) || 0),
+                  title,
                   description: $('#upDesc').value.trim(),
                   category: $('#upCat').value,
                   type: $('input[name="upType"]:checked').value,
@@ -1681,6 +1960,13 @@
               if (res.del_key) S.myDelKeys[res.id] = res.del_key;
               YV.store.save();
               await loadVideos();
+              if (musFile) {
+                try {
+                  const mfd = new FormData();
+                  mfd.append('music', musFile);
+                  await xhrSend('POST', '/api/videos/' + res.id + '/music', mfd, {}, null);
+                } catch (mErr) {}
+              }
               toast('Published! Video is processing on CDN — playable in ~1 min 🎉', '🚀');
               location.hash = '#/watch/' + res.id;
               UPLOADING = false;
@@ -1778,6 +2064,8 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             id: uid,
+            trimStart: Math.max(0, parseInt((document.getElementById('upTrimA') || {}).value, 10) || 0),
+            trimEnd: Math.max(0, parseInt((document.getElementById('upTrimB') || {}).value, 10) || 0),
             title,
             description: $('#upDesc').value.trim(),
             category: $('#upCat').value,
@@ -1793,6 +2081,13 @@
         if (res.del_key) S.myDelKeys[res.id] = res.del_key;
         YV.store.save();
         await loadVideos();
+        if (musFile) {
+          try {
+            const mfd = new FormData();
+            mfd.append('music', musFile);
+            await xhrSend('POST', '/api/videos/' + res.id + '/music', mfd, {}, null);
+          } catch (mErr) {}
+        }
         toast('Published! Everyone can see it now', '🎉');
         location.hash = '#/watch/' + res.id;
       } catch (ex) {
@@ -2063,6 +2358,12 @@
     const hpanel = document.querySelector('#helpPanel');
     if (btn) { openNotifPanel(); return; }
     if (hbtn) { openHelpPanel(); return; }
+    const dbtn = e.target.closest('#dmBtn');
+    if (dbtn) {
+      if (!(S.auth && S.auth.token)) { toast('Log in to use messages 🔒', '🔒'); return; }
+      openDmPanel();
+      return;
+    }
     if (panel && !panel.classList.contains('hide') && !e.target.closest('#notifPanel')) panel.classList.add('hide');
     if (hpanel && !hpanel.classList.contains('hide') && !e.target.closest('#helpPanel')) hpanel.classList.add('hide');
   });
@@ -2436,6 +2737,7 @@
       + '<div class="admin-row"><input type="number" id="adminViewersN" value="500" min="1" max="100000"><button class="pill-btn" data-admin="live-viewers-plus">👁 + Зрители</button><button class="pill-btn danger" data-admin="live-viewers-minus">👁 − Зрители</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">± viewers on the CURRENT live stream</span></div>'
       + '<div class="admin-row"><select id="adminReactE"><option>😂</option><option>❤️</option><option>🔥</option><option>👏</option><option>😮</option><option>💯</option><option>🎉</option><option>👍</option></select><button class="pill-btn" data-admin="react-launch">🎈 Emoji rain</button></div>'
+      + '<div class="admin-row"><input type="text" id="adminQuizQ" maxlength="150" placeholder="Quiz question"><input type="text" id="adminQuizO" maxlength="200" placeholder="opt1, opt2, opt3"><button class="pill-btn" data-admin="quiz-launch">❓ Quiz</button><button class="pill-btn danger" data-admin="quiz-stop">⏹ Stop quiz</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">clears every notification</span><button class="pill-btn danger" data-admin="notif-clear">🗑 Clear notifications</button></div>'
       + '<div class="admin-row"><span class="muted-txt" style="flex:1;align-self:center;font-size:13px">delete notifications one by one</span><button class="pill-btn" data-admin="notif-list">🔔 Notifications list</button></div>'
       + '<div class="admin-row" style="flex-direction:column;align-items:stretch"><div id="adminNotifList" class="adm-sup-list"><span class="muted-txt">Click “Notifications list” to load…</span></div></div>'
@@ -2634,6 +2936,21 @@
       } catch (e) { toast('Failed: ' + (e.message || 'error'), '⚠️'); }
       return;
     }
+    if (kind === 'quiz-launch') {
+      const q = ($('#adminQuizQ') && $('#adminQuizQ').value || '').trim();
+      const options = ($('#adminQuizO') && $('#adminQuizO').value || '').split(',').map(x => x.trim()).filter(Boolean);
+      if (!q || options.length < 2) { toast('Question + 2 options needed', '⚠️'); return; }
+      try {
+        const r = await fetch(API_BASE + '/api/admin/live/quiz', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin-Key': ADMIN_KEY }, body: JSON.stringify({ q, options }) });
+        if (r.status === 404) { toast('No live stream running 📡', '⚠️'); return; }
+        toast('Quiz launched on the live stream ❓', '❓');
+      } catch (e2) { toast('Failed', '⚠️'); }
+      return;
+    }
+    if (kind === 'quiz-stop') {
+      try { await fetch(API_BASE + '/api/admin/live/quiz', { method: 'DELETE', headers: { 'X-Admin-Key': ADMIN_KEY } }); toast('Quiz stopped ⏹', '❓'); } catch (e2) {}
+      return;
+    }
     if (kind === 'ai-ideas') {
       const topic = ($('#adminAiTopic') && $('#adminAiTopic').value || '').trim();
       const out = $('#adminAiOut');
@@ -2806,7 +3123,7 @@
   });
 
   /* ═══════════ global events ═══════════ */
-  document.addEventListener('click', e => {
+  document.addEventListener('click', async e => {
     const sv = e.target.closest('.short video');
     if (sv) { sv.paused ? sv.play().catch(() => {}) : sv.pause(); return; }
 
@@ -2826,6 +3143,23 @@
     else if (a === 'like') { const lr = t.getBoundingClientRect(); spawnHearts(lr.x + lr.width / 2, lr.y + 6); toggleLike(id); }
     else if (a === 'short-comments') { e.preventDefault(); openShortComments(id); }
     else if (a === 'pl-add') { e.preventDefault(); plAddFlow(id); }
+    else if (a === 'subs-edit') { e.preventDefault(); subsEditor(id); }
+    else if (a === 'collab-add') {
+      e.preventDefault();
+      const who = prompt('Add co-creator (exact username):');
+      if (!who) return;
+      try {
+        await api('/api/videos/' + id + '/collab', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ creator: who.trim() }) });
+        toast('Co-creator added 👥', '✅');
+        navigate();
+      } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
+    }
+    else if (a === 'dm-open') {
+      e.preventDefault();
+      if (!(S.auth && S.auth.token)) { toast('Log in to use messages 🔒', '🔒'); return; }
+      await openDmPanel();
+      if (t.dataset.ch) await openDmThread(t.dataset.ch);
+    }
     else if (a === 'dislike') toggleDislike(id);
     else if (a === 'sub') toggleSub(t.dataset.ch);
     else if (a === 'share') doShare(id);
@@ -2964,6 +3298,8 @@
       + '<span class="lb-stat" id="lbSegs">0 segs</span>'
       + '<span class="lb-stat" id="lbMic">🎙 —</span>'
       + '<span class="lb-stat" id="lbViewers">👁 …</span>'
+      + '<button class="lb-btn" id="lbGuest" title="Copy co-host invite link">👥</button>'
+      + '<button class="lb-btn" id="lbQuiz" title="Launch a quiz for viewers">❓</button>'
       + '<button class="lb-end" id="lbEnd">⏹ End stream</button>';
     document.body.appendChild(bar);
     return bar;
@@ -3007,6 +3343,25 @@
     buildLiveBar(title);
     const btn = $('#lbEnd');
     btn.onclick = () => endBroadcast();
+    const gbtn = $('#lbGuest');
+    if (gbtn) gbtn.onclick = async () => {
+      try {
+        const gl = await api('/api/live/' + liveStreamId + '/guest-link');
+        try { await navigator.clipboard.writeText(gl.url); toast('Co-host link copied — send it to your guest 👥', '📋'); }
+        catch (e) { prompt('Co-host link — send it to your guest:', gl.url); }
+      } catch (e) { toast(e.message || 'failed', '⚠️'); }
+    };
+    const qbtn = $('#lbQuiz');
+    if (qbtn) qbtn.onclick = async () => {
+      const q = prompt('Quiz question for viewers:');
+      if (!q) return;
+      const opts = prompt('Options, comma-separated:', 'Yes,No').split(',').map(x => x.trim()).filter(Boolean);
+      if (opts.length < 2) { toast('2+ options needed', '⚠️'); return; }
+      try {
+        await api('/api/live/' + liveStreamId + '/quiz', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q, options: opts }) });
+        toast('Quiz launched ❓ — viewers see it in chat', '❓');
+      } catch (e) { toast(e.message || 'failed', '⚠️'); }
+    };
 
     let secs = 0;
     liveTimer = setInterval(async () => {
@@ -3062,6 +3417,23 @@
       const sg = document.getElementById('lbSegs');
       if (sg) sg.textContent = liveChunksSent + ' segs';
     };
+    /* auto-subtitles: Web Speech capture during the broadcast */
+    let subsRows = [];
+    try {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const subCb = document.querySelector('#liveSubs');
+      if (SR && subCb && subCb.checked) {
+        const rec2 = new SR();
+        rec2.lang = (document.querySelector('#liveSubLang') || {}).value || 'ru-RU';
+        rec2.continuous = true; rec2.interimResults = false;
+        const t0 = Date.now();
+        rec2.onresult = e => { for (const rr of e.results) { if (rr.isFinal) { const txt2 = rr[0].transcript.trim(); if (txt2) subsRows.push({ t: Math.round((Date.now() - t0) / 1000), text: txt2.slice(0, 140) }); } } };
+        rec2.onend = () => { try { if (!liveEnding && rec2) rec2.start(); } catch (e) {} };
+        rec2.start();
+        window._subsRec = rec2; window._subsRows = subsRows;
+        toast('Auto-subtitles ON (' + rec2.lang + ') 🗣', '📝');
+      }
+    } catch (e) {}
     /* capture surface dies → end cleanly */
     const vTrack = stream.getVideoTracks()[0];
     if (vTrack) vTrack.addEventListener('ended', () => { if (liveStreamId) endBroadcast(); });
@@ -3079,10 +3451,11 @@
     try {
       const ctrl = new AbortController();
       const killer = setTimeout(() => ctrl.abort(), 8000);
-      await fetch(API_BASE + '/api/live/' + sid + '/end', { method: 'POST', headers: { 'X-Auth': (S.auth && S.auth.token) || '' }, signal: ctrl.signal });
+      await fetch(API_BASE + '/api/live/' + sid + '/end', { method: 'POST', headers: { 'X-Auth': (S.auth && S.auth.token) || '', 'Content-Type': 'application/json' }, body: JSON.stringify({ subs: window._subsRows || [] }), signal: ctrl.signal });
       clearTimeout(killer);
     } catch (e) { /* server auto-ends after 45s without segments */ }
     toast('Stream ended', '🔴');
+    try { if (window._subsRec) { try { window._subsRec.onend = null; window._subsRec.stop(); } catch (e) {} } window._subsRec = null; window._subsRows = []; } catch (e) {}
     try { if (mixRef && mixRef.ctx) mixRef.ctx.close().catch(() => {}); } catch (e) {}
     mixRef = null; micSilentSecs = 0;
     liveRecorder = null; liveStreamId = null; liveRawStream = null; UPLOADING = false;
@@ -3120,6 +3493,13 @@
       + '<label class="rd"><input type="radio" name="liveSrc" value="screen" checked> 🖥️ Screen</label>'
       + '<label class="rd"><input type="radio" name="liveSrc" value="camera"> 📷 Camera</label>'
       + '<label class="rd"><input type="checkbox" id="liveMic" checked> 🎙 Mic sound</label>'
+      + '<label class="rd"><input type="checkbox" id="liveSubs"> 🗣 Subtitles</label>'
+      + '<select id="liveSubLang" class="mini-select"><option value="ru-RU">RU</option><option value="en-US">EN</option></select>'
+      + '</div></div>'
+      + '<div class="field"><label>🖼 Virtual backdrop</label><div class="field-row">'
+      + '<select id="bgSel" class="mini-select"><option value="">None</option><option value="c:#0a0e2a">Dark navy</option><option value="g">Neon gradient</option><option value="c:#101010">Studio black</option><option value="i">🖼 Image…</option></select>'
+      + '<input type="file" id="bgImg" accept="image/*" hidden>'
+      + '</div><p class="muted-txt" id="bgHint">your camera gets composited over the backdrop — records into the stream</p></div>'
       + '</div></div>'
       + '<div class="field"><label>Thumbnail</label>'
       + '<div class="file-row"><button type="button" class="pill-btn ghost" id="thumbCapBtn">📷 Capture frame</button>'
@@ -3171,6 +3551,59 @@
         btn.disabled = false; btn.textContent = '🔴 Go Live';
         return;
       }
+      /* virtual backdrop: composite the camera over a backdrop via canvas */
+      const bgMode = (document.querySelector('#bgSel') || {}).value || '';
+      if (bgMode) {
+        try {
+          const vTrack0 = stream.getVideoTracks()[0];
+          if (vTrack0) {
+            const camV = document.createElement('video');
+            camV.srcObject = new MediaStream([vTrack0]);
+            camV.muted = true; camV.playsInline = true;
+            camV.play().catch(() => {});
+            const cv = document.createElement('canvas');
+            cv.width = 1280; cv.height = 720;
+            const cx = cv.getContext('2d');
+            const bgIm = window._bgImg;
+            const drawLoop = () => {
+              try {
+                if (bgIm) {
+                  const sc = Math.max(cv.width / bgIm.width, cv.height / bgIm.height);
+                  const w = bgIm.width * sc, hh = bgIm.height * sc;
+                  cx.drawImage(bgIm, (cv.width - w) / 2, (cv.height - hh) / 2, w, hh);
+                } else if (bgMode === 'g') {
+                  const gr = cx.createLinearGradient(0, 0, cv.width, cv.height);
+                  gr.addColorStop(0, '#ff2bd6'); gr.addColorStop(1, '#00e5ff');
+                  cx.fillStyle = gr; cx.fillRect(0, 0, cv.width, cv.height);
+                } else {
+                  cx.fillStyle = bgMode.replace('c:', '') || '#0a0e2a';
+                  cx.fillRect(0, 0, cv.width, cv.height);
+                }
+                const vw = camV.videoWidth, vh = camV.videoHeight;
+                if (vw && vh) {
+                  const h = cv.height - 60, w = vw * h / vh;
+                  const x = (cv.width - w) / 2, y = 30;
+                  cx.save();
+                  cx.strokeStyle = 'rgba(0, 229, 255, .8)'; cx.lineWidth = 4;
+                  cx.beginPath();
+                  if (cx.roundRect) cx.roundRect(x, y, w, h, 18); else cx.rect(x, y, w, h);
+                  cx.stroke();
+                  cx.clip();
+                  cx.drawImage(camV, x, y, w, h);
+                  cx.restore();
+                }
+              } catch (x) {}
+              requestAnimationFrame(drawLoop);
+            };
+            drawLoop();
+            const compTrack = cv.captureStream(30).getVideoTracks()[0];
+            stream.removeTrack(vTrack0);
+            stream.addTrack(compTrack);
+            bgHint.textContent = '🖼 backdrop is ON — it records into the stream';
+          }
+        } catch (e) { bgHint.textContent = '⚠️ backdrop failed: ' + (e.message || e); }
+      }
+
       liveRawStream = stream;
 
       /* mic: "allow" is not enough — the OS default input may be disconnected.
@@ -3239,6 +3672,7 @@
       + '<div class="chat-head">💬 Live chat <span class="vrf-badge" title="Verified">✓</span></div>'
       + '<div class="chat-list" id="chatList"></div>'
       + '<div class="react-row" id="reactRow">' + ['😂', '❤️', '🔥', '👏', '😮', '💯', '🎉', '👍'].map(x => '<button type="button" class="react-emoji" data-e="' + x + '">' + x + '</button>').join('') + '</div>'
+      + '<div class="quiz-card hide" id="quizCard"></div>'
       + '<form class="chat-input" id="chatForm"><input id="chatText" maxlength="150" placeholder="Say something…"><button class="pill-btn">➤</button></form>'
       + '</div>'
       + '</div>'
@@ -3375,6 +3809,33 @@
         if (pl.status !== 'live') { clearInterval(livePoller); liveOver(); return; }
         if (pl.mime) plMime = pl.mime;
         (pl.reacts || []).forEach(r => { if (r.id > lastReactId) { lastReactId = r.id; floatEmoji(r.e); } });
+        /* guest co-host PiP */
+        const gsegs = pl.guestSegs || [];
+        if (gsegs.length) {
+          let gp = document.getElementById('guestPip');
+          if (!gp) {
+            gp = document.createElement('video');
+            gp.id = 'guestPip'; gp.className = 'guest-pip'; gp.autoplay = true; gp.muted = true;
+            gp.setAttribute('playsinline', ''); gp.loop = true;
+            const pl2 = document.querySelector('#livePlayer');
+            if (pl2) pl2.appendChild(gp);
+          }
+          if (gp.dataset.src !== gsegs[gsegs.length - 1]) { gp.dataset.src = gsegs[gsegs.length - 1]; gp.src = gsegs[gsegs.length - 1]; gp.play().catch(() => {}); }
+        }
+        /* live quiz card */
+        const qz = pl.quiz;
+        const qc = document.getElementById('quizCard');
+        if (qc) {
+          if (qz && qz.open) {
+            qc.classList.remove('hide');
+            qc.innerHTML = '<div class="quiz-q">❓ ' + esc(qz.q) + '</div>' + qz.options.map((o, oi) =>
+              '<button class="quiz-opt" data-opt="' + oi + '">' + esc(o) + ' · ' + (qz.votes[oi] || 0) + '</button>').join('');
+            qc.querySelectorAll('.quiz-opt').forEach(b => b.onclick = async () => {
+              b.disabled = true;
+              try { const rr2 = await api('/api/live/' + id + '/quiz-vote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ opt: Number(b.dataset.opt) }) }); const vv = rr2.votes || []; qc.querySelectorAll('.quiz-opt').forEach((bb, bi) => { bb.textContent = qz.options[bi] + ' · ' + (vv[bi] || 0); }); } catch (e2) {}
+            });
+          } else qc.classList.add('hide');
+        }
         const segs = pl.segs || [];
         if (segs.length > lastSegCount) {
           segUrls.push(...segs.slice(lastSegCount));
@@ -3405,6 +3866,7 @@ const routes = [
     [/^\/channel$/,           () => viewMyChannel()],
     [/^\/c\/(.+)$/,           m => viewChannel(m[1])],
     [/^\/tag\/(.+)$/,         m => viewTag(decodeURIComponent(m[1]))],
+    [/^\/guest\/([\w-]+)$/,   m => viewGuest(m[1])],
     [/^\/watch\/([\w-]+)$/,   m => viewWatch(m[1])],
     [/^\/results$/,           q => viewResults(q)],
   ];
