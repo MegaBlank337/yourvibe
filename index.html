@@ -17,8 +17,8 @@
 <link rel="manifest" href="/manifest.webmanifest">
 	<meta name="theme-color" content="#00e5ff">
 	<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
-	<link rel="stylesheet" href="css/style.css?v=100">
-<script>window.YV_V = 100;</script>
+	<link rel="stylesheet" href="css/style.css?v=102">
+<script>window.YV_V = 102;</script>
 	<script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});</script>
 </head>
 <body>
@@ -42,6 +42,7 @@
   <div class="top-actions">
     <button class="notif-btn" id="notifBtn" title="Notifications">🔔<span class="notif-count" id="notifCount"></span></button>
     <button class="notif-btn" id="helpBtn" title="Help chat — talk to the YourVibe admin">💬<span class="notif-count" id="helpCount"></span></button>
+    <button class="notif-btn" id="dmBtn" title="Messages">✉<span class="notif-count" id="dmCount"></span></button>
     <a class="upload-btn" href="#/upload"><span class="ub-ico">＋</span><span class="ub-lbl">Upload</span></a>
     <a href="#/channel" class="me-avatar" id="meAvatar" title="Your channel"></a>
   </div>
@@ -91,14 +92,18 @@
     <button class="pill-btn" type="submit">➤</button>
   </form>
 </div>
+<div class="notif-panel help-panel hide" id="dmPanel">
+  <div class="notif-head">✉ Messages <button class="scd-close" id="dmClose">✕</button></div>
+  <div id="dmBody" style="flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden"></div>
+</div>
 <div class="toasts" id="toasts"></div>
 
 <noscript><div style="padding:40px;text-align:center;font-family:sans-serif">YourVibe needs JavaScript ⚡</div></noscript>
 
-<script src="js/data.js?v=100"></script>
-<script src="js/storage.js?v=100"></script>
+<script src="js/data.js?v=101"></script>
+<script src="js/storage.js?v=101"></script>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
-<script src="js/bunny.js?v=100"></script>
-<script src="js/app.js?v=100"></script>
+<script src="js/bunny.js?v=101"></script>
+<script src="js/app.js?v=102"></script>
 </body>
 </html>
