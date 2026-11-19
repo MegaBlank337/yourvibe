@@ -282,7 +282,7 @@
     wrap.innerHTML = '<div class="scd-backdrop"></div><div class="scd">'
       + '<div class="scd-head"><b>💬 Comments</b><button class="scd-close">✕</button></div>'
       + '<div class="scd-list">' + loadingHTML() + '</div>'
-      + '<form class="scd-form"><input maxlength="150" placeholder="Add a comment…"><button class="pill-btn" type="submit">➤</button></form>'
+      + '<form class="scd-form"><div class="c-stick-wrap"><button type="button" class="c-stick" data-stick>😄</button><div class="stick-picker hide">' + STICKERS.map(s => '<button type="button" class="stk" data-e="' + s + '">' + s + '</button>').join('') + '</div></div><input maxlength="150" placeholder="Add a comment…"><button class="pill-btn" type="submit">➤</button></form>'
       + '</div>';
     document.body.appendChild(wrap);
     const close = () => wrap.remove();
@@ -296,7 +296,7 @@
           const pal = palFor(c.author);
           return '<div class="scd-item">' + avatarHTML({ name: c.author, colors: pal }, 34)
             + '<div class="scd-body"><div class="scd-name">@' + nameHTML(c.author) + '</div>'
-            + '<div class="scd-txt">' + esc(c.text) + '</div>'
+            + '<div class="scd-txt">' + linkify(esc(c.text)) + '</div>'
             + '<div class="scd-time">' + timeAgo(c.created_at ? Date.parse(c.created_at) : Date.now()) + '</div></div></div>';
         }).join('') : '<p class="muted-txt" style="padding:14px;text-align:center">No comments yet — be first 💬</p>';
         list.scrollTop = list.scrollHeight;
@@ -359,6 +359,24 @@
   }
 
   document.addEventListener('click', async e => {
+    const stk = e.target.closest('[data-stick]');
+    if (stk) {
+      e.preventDefault();
+      const wrap = stk.closest('.c-stick-wrap');
+      const pk = wrap && wrap.querySelector('.stick-picker');
+      if (pk) pk.classList.toggle('hide');
+      return;
+    }
+    const em = e.target.closest('.stk');
+    if (em) {
+      e.preventDefault();
+      const wrap = em.closest('.c-stick-wrap');
+      const form = wrap && wrap.closest('form');
+      const inp = form && form.querySelector('input[name="ctext"], input[maxlength="150"], input[maxlength="300"]');
+      if (inp) inp.value = (inp.value || '') + em.dataset.e;
+      if (wrap) { const pk = wrap.querySelector('.stick-picker'); if (pk) pk.classList.add('hide'); }
+      return;
+    }
     const cl = e.target.closest('[data-clike]');
     if (cl) {
       e.preventDefault();
@@ -433,6 +451,63 @@
       } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
     }
   });
+
+  /* ── v100 helpers ── */
+  const STICKERS = ['😂', '❤️', '🔥', '👏', '😮', '😢', '🤯', '💩', '🎉', '👍', '🚀', '🌈', '😎', '🥳', '😤', '👻', '🤖', '🐱', '🍕', '⭐', '💀', '🤝'];
+  function linkify(s) {
+    return String(s)
+      .replace(/#([\p{L}\d_]{2,30})/gu, '<a class="tag-link" href="#/tag/$1">#$1</a>')
+      .replace(/(^|[\s(])@([a-zA-Z0-9_]{2,20})/g, '$1<a class="mention-link" href="#/c/$2">@$2</a>');
+  }
+  const fmtT = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+
+  function renderChapters(v) {
+    try {
+      const rows = String(v.description || '').split('\n').map(l => l.trim())
+        .map(l => { const m = l.match(/^(?:\d{1,2}:)?(\d{1,2}):(\d{2})\s+(.{2,80})$/); return m ? { t: (+m[1]) * 60 + (+m[2]), label: m[3] } : null; })
+        .filter(Boolean);
+      if (rows.length < 2) return;
+      const p = document.querySelector('#yvPlayer');
+      if (!p || p.parentElement.querySelector('.chapters-row')) return;
+      const row = document.createElement('div');
+      row.className = 'chapters-row';
+      row.innerHTML = '<div class="ch-head">📑 Chapters</div>' + rows.map(c =>
+        '<button class="ch-btn" data-t="' + c.t + '">' + esc(c.label) + ' · ' + fmtT(c.t) + '</button>').join('');
+      row.querySelectorAll('.ch-btn').forEach(b => b.onclick = () => {
+        const v2 = document.querySelector('#yvVideo');
+        if (v2) { v2.currentTime = Number(b.dataset.t); v2.play().catch(() => {}); }
+      });
+      p.parentElement.insertBefore(row, p.nextSibling);
+    } catch (e) {}
+  }
+
+  /* ── mini-player: a playing video follows you across pages ── */
+  let miniBox = null;
+  function showMiniPlayer(el, vid, title) {
+    closeMiniPlayer();
+    const box = document.createElement('div');
+    box.className = 'mini-player';
+    box.innerHTML = '<div class="mp-head"><span class="mp-t">' + esc(String(title || '').slice(0, 40)) + '</span>'
+      + '<button class="mp-go" title="Open">↗</button><button class="mp-x" title="Close">✕</button></div>';
+    box.appendChild(el);
+    document.body.appendChild(box);
+    miniBox = { box, vid, el };
+    box.querySelector('.mp-x').onclick = () => { el.pause(); box.remove(); miniBox = null; };
+    box.querySelector('.mp-go').onclick = () => { location.hash = '#/watch/' + vid; };
+  }
+  function closeMiniPlayer() {
+    if (miniBox) { try { miniBox.el.pause(); } catch (e) {} miniBox.box.remove(); miniBox = null; }
+  }
+
+  /* ── social links row (channel pages) ── */
+  function socialHTML(links) {
+    if (!links) return '';
+    const out = [];
+    if (links.yt) out.push('<a class="soc-link" href="' + esc(links.yt) + '" target="_blank" rel="noopener" title="YouTube">▶</a>');
+    if (links.tg) out.push('<a class="soc-link" href="' + esc(links.tg) + '" target="_blank" rel="noopener" title="Telegram">✈</a>');
+    if (links.ig) out.push('<a class="soc-link" href="' + esc(links.ig) + '" target="_blank" rel="noopener" title="Instagram">📷</a>');
+    return out.length ? '<span class="soc-row">' + out.join('') + '</span>' : '';
+  }
 
   function thumbSrc(v) {
     if (v.store === 'bunny' && v.thumb_url && v.thumb_url.includes('b-cdn')) {
@@ -628,6 +703,10 @@
     const trending = trendPool.slice().sort((a, b) => viewsOf(b) - viewsOf(a)).slice(0, 4);
     const filtered = cat === 'All' ? videos : videos.filter(v => v.category === cat);
     const shortList = cat === 'All' ? shorts : shorts.filter(s => s.category === cat);
+    const histCats = {};
+    S.history.forEach(id2 => { const hv = byId(id2); if (hv && hv.category) histCats[hv.category] = (histCats[hv.category] || 0) + 1; });
+    const topCat = Object.keys(histCats).sort((a, b) => histCats[b] - histCats[a])[0] || '';
+    const forYou = topCat ? videos.filter(v => v.category === topCat && !S.history.includes(v.id)).slice(0, 4) : [];
 
     main.innerHTML =
       '<div class="chips">' + ['All'].concat(YV.CATS).map(c =>
@@ -639,6 +718,7 @@
       + (typeof liveShelfHTML === 'function' ? liveShelfHTML() : '')
 
       + (shortList.length ? shelf('⚡ Shorts', shortList.slice(0, 10).map(shortCardHTML).join('')) : '')
+      + (forYou.length && cat === 'All' ? shelf('🎯 For you' + (topCat ? ' — ' + esc(topCat) : ''), forYou.map(cardHTML).join('')) : '')
 
       + '<section class="recs"><div class="shelf-head"><h2 class="section-title">✨ Recommended</h2></div>'
       + (filtered.length
@@ -764,6 +844,19 @@
         : '<p class="muted-txt pad">No uploads from these creators yet.</p>');
   }
 
+  /* ═══════════ VIEW: TAG ═══════════ */
+  async function viewTag(name) {
+    if (!await ensureVideos()) return;
+    const tag = String(name || '').toLowerCase().replace(/[^\p{L}\d_]/gu, '');
+    if (!tag) { location.hash = '#/home'; return; }
+    $('#searchInput') && ($('#searchInput').value = '#' + tag);
+    const res = VIDEOS.filter(v => !isStream(v) && (((v.title || '') + ' ' + (v.description || '')).toLowerCase().includes('#' + tag)));
+    main.innerHTML = '<h1 class="page-title">🏷️ #' + esc(tag) + '</h1>'
+      + (res.length
+        ? '<div class="cards">' + res.map(cardHTML).join('') + '</div>'
+        : emptyHTML('🏷️', 'Nothing tagged #' + esc(tag), 'Be the first to use this hashtag in a title or description!', '<a class="btn-neon" href="#/upload">＋ Upload</a>'));
+  }
+
   /* ═══════════ VIEW: LIBRARY ═══════════ */
   async function viewLibrary() {
     if (!await ensureVideos()) return;
@@ -807,7 +900,7 @@
       + '<span class="ch-ava">' + avatarHTML(meCh(), 96) + '</span>'
       + '<div class="ch-id"><h1 class="ch-name-big rank-name"' + (rankOf(myName()) ? ' style="color:' + rankOf(myName()).hex + ';text-shadow:0 0 18px ' + rankOf(myName()).hex + '66"' : '') + '>' + nameHTML(myName()) + (rankOf(myName()) ? ' <span class="rank-chip" style="border-color:' + rankOf(myName()).hex + ';color:' + rankOf(myName()).hex + '">' + rankOf(myName()).label + '</span>' : '') + '</h1>'
       + '<div class="ch-sub">' + fmtNum(subsOfCreator(myName())) + ' subscribers · ' + fmtNum(totalViews) + ' views · ' + mine.length + ' upload' + (mine.length === 1 ? '' : 's') + '</div></div>'
-      + '<div class="ch-actions"><a class="btn-neon" href="#/upload">＋ Upload</a>'
+      + '<div class="ch-actions">' + socialHTML(S.myChannel.links) + '<a class="btn-neon" href="#/upload">＋ Upload</a>'
       + '<a class="pill-btn ghost" href="#/settings">⚙ Customize channel</a></div>'
       + '</div>'
       + '<div class="ch-tabs">'
@@ -842,6 +935,8 @@
     const n = decodeURIComponent(name);
     const vids = VIDEOS.filter(v => v.uploader === n && !isStream(v));
     const streams = VIDEOS.filter(v => v.uploader === n && isStream(v));
+    let chLinks = null;
+    if (S.auth && S.auth.token ? n !== myName() : true) { try { chLinks = (await api('/api/channels/' + encodeURIComponent(n) + '/links')).links; } catch (e) {} }
     const pal = n === S.myChannel.name ? S.myChannel.colors : palFor(n);
     if (S.auth && S.auth.token && n !== myName()) await loadStreamSubs();
     const rk = rankOf(n);
@@ -851,6 +946,7 @@
       + '<span class="ch-ava">' + avatarHTML({ name: n, colors: pal, isMe: n === S.myChannel.name }, 96) + '</span>'
       + '<div class="ch-id"><h1 class="ch-name-big rank-name"' + (rankOf(n) ? ' style="color:' + rankOf(n).hex + ';text-shadow:0 0 18px ' + rankOf(n).hex + '66"' : '') + '>' + nameHTML(n) + (rankOf(n) ? ' <span class="rank-chip" style="border-color:' + rankOf(n).hex + ';color:' + rankOf(n).hex + '">' + rankOf(n).label + '</span>' : '') + '</h1>'
       + '<div class="ch-sub">' + fmtNum(subsOfCreator(n)) + ' subscribers · ' + vids.length + ' video' + (vids.length === 1 ? '' : 's') + (streams.length ? ' · ' + streams.length + ' stream' + (streams.length === 1 ? '' : 's') : '') + '</div></div>'
+      + socialHTML(chLinks)
       + streamBellHTML(n)
       + subBtnHTML(n)
       + '</div>'
@@ -883,14 +979,14 @@
       return '<div class="c-item c-reply" data-cid="' + r.id + '">'
         + '<div class="c-ava-wrap">' + avatarHTML({ name: r.author, colors: rp }, 26) + '</div>'
         + '<div class="c-body"><div class="c-user">@' + nameHTML(r.author) + ' <span>' + timeAgo(r.created_at ? Date.parse(r.created_at) : Date.now()) + '</span></div>'
-        + '<p>' + esc(r.text) + '</p>'
+        + '<p>' + linkify(esc(r.text)) + '</p>'
         + '<div class="c-actions"><button class="c-like" data-clike="' + r.id + '">❤️ <span class="cl-n">' + (r.likes ? fmtNum(r.likes) : '') + '</span></button></div>'
         + '</div></div>';
     }).join('') : '');
     return '<div class="c-item" data-cid="' + c.id + '">'
       + '<div class="c-ava-wrap">' + avatarHTML({ name: c.author, colors: pal }, 34) + '</div>'
       + '<div class="c-body"><div class="c-user">@' + nameHTML(c.author) + ' <span>' + timeAgo(c.created_at ? Date.parse(c.created_at) : Date.now()) + '</span></div>'
-      + '<p>' + esc(c.text) + '</p>'
+      + '<p>' + linkify(esc(c.text)) + '</p>'
       + '<div class="c-actions">'
       + '<button class="c-like" data-clike="' + c.id + '">❤️ <span class="cl-n">' + (c.likes ? fmtNum(c.likes) : '') + '</span></button>'
       + '<button class="c-reply-btn" data-creply="' + c.id + '" data-cuser="' + esc(c.author) + '">↩ Reply</button>'
@@ -915,6 +1011,7 @@
       + '<h2 class="c-head" id="cHead">' + fmtNum(list.length) + ' Comments</h2>'
       + '<form class="c-input" data-form="comment" data-id="' + v.id + '">'
       + avatarHTML(meCh(), 36)
+      + '<div class="c-stick-wrap"><button type="button" class="c-stick" data-stick>😄</button><div class="stick-picker hide">' + STICKERS.map(s => '<button type="button" class="stk" data-e="' + s + '">' + s + '</button>').join('') + '</div></div>'
       + '<input name="ctext" placeholder="Add a comment…" maxlength="300" required>'
       + '<button class="pill-btn" type="submit">Comment</button></form>'
       + '<div class="c-list" id="cList">' + renderCommentTree(list) + '</div>'
@@ -944,6 +1041,8 @@
       + '<input type="range" class="volume" id="yvVol" min="0" max="1" step="0.05" value="1">'
       + '<span class="time" id="yvTime">0:00 / 0:00</span>'
       + '<span class="ctl-spacer"></span>'
+      + '<button class="ctl-btn" id="yvFilter" title="Filters">🎨</button>'
+      + '<button class="ctl-btn" id="yvQual" title="Quality">HQ</button>'
       + '<button class="ctl-btn" id="yvFull" title="Fullscreen (f)">⛶</button>'
       + '</div></div></div>';
   }
@@ -981,10 +1080,11 @@
       + '<button class="act-btn" data-action="share" data-id="' + v.id + '">🔗 Share</button>'
       + '<button class="act-btn' + (S.later[v.id] ? ' on' : '') + '" data-action="later" data-id="' + v.id + '">⏳ Later</button>'
       + '<button class="act-btn" data-action="pl-add" data-id="' + v.id + '">▶＋ Playlist</button>'
+      + ((S.auth && S.auth.username === v.uploader) ? '<a class="act-btn" href="' + srcOf(v) + '" download="yourvibe-' + v.id.slice(0, 8) + '" title="Download your video">⬇ Download</a>' : '')
       + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="act-btn danger" data-action="del" data-id="' + v.id + '">🗑 Delete</button>' : '')
       + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="act-btn" data-action="addpoll" data-id="' + v.id + '">📊 Poll</button>' : '')
       + '</div>'
-        + '<div class="w-desc"><b>' + fmtNum(viewsOf(v)) + ' views · ' + agoOf(v) + (v.category ? ' · #' + esc(v.category) : '') + '</b><br>' + esc(v.description || '') + '</div>'
+        + '<div class="w-desc"><b>' + fmtNum(viewsOf(v)) + ' views · ' + agoOf(v) + (v.category ? ' · #' + esc(v.category) : '') + '</b><br>' + linkify(esc(v.description || '')) + '</div>'
       + '<div id="pollSlot"></div>'
       + '<div id="comments-slot">' + loadingHTML() + '</div>'
       + '</div>'
@@ -993,6 +1093,7 @@
       + '</aside></div>';
 
     commentsHTML(v).then(html => { const slot = $('#comments-slot'); if (slot) slot.outerHTML = html; });
+    renderChapters(v);
     loadPoll(v.id);
 
     /* ended live stream (VOD): sequential webm segments, full comments/likes UI */
@@ -1146,6 +1247,7 @@
             const hls = new Hls({ maxBufferLength: 30, startLevel: 0 });
             hls.loadSource(s.hls);
             hls.attachMedia(nv);
+            window._hls = hls;
             cleanups.push(() => hls.destroy());
           } else if (nv.canPlayType('application/vnd.apple.mpegurl')) {
             nv.src = s.hls; // Safari native HLS
@@ -1236,6 +1338,27 @@
 
     const toggle = () => V.paused ? V.play().catch(() => {}) : V.pause();
     big.onclick = toggle; V.onclick = toggle; playB.onclick = toggle;
+    /* quality selector (HLS adaptive streams) */
+    const qual = $('#yvQual');
+    if (qual) {
+      if (window._hls && window._hls.levels && window._hls.levels.length > 1) {
+        const lvls = window._hls.levels.map((l, i) => ({ i, h: l.height })).filter(x => x.h).sort((a, b) => b.h - a.h);
+        let qi = -1;
+        qual.textContent = 'AUTO';
+        qual.onclick = () => {
+          qi = qi + 1 > lvls.length - 1 ? -1 : qi + 1;
+          if (qi < 0) { window._hls.currentLevel = -1; qual.textContent = 'AUTO'; }
+          else { window._hls.currentLevel = lvls[qi].i; qual.textContent = lvls[qi].h + 'p'; }
+        };
+      } else qual.style.display = 'none';
+    }
+    /* display filters */
+    const flt = $('#yvFilter');
+    if (flt) {
+      const PRESETS = [['none', '🎨'], ['saturate(1.55) contrast(1.12)', 'Vivid'], ['grayscale(1)', 'Mono'], ['sepia(.55) saturate(1.25)', 'Warm'], ['hue-rotate(150deg) saturate(1.3)', 'Cool'], ['invert(1) hue-rotate(180deg)', 'X-Ray']];
+      let fi = 0;
+      flt.onclick = () => { fi = (fi + 1) % PRESETS.length; V.style.filter = PRESETS[fi][0]; flt.title = 'Filter: ' + PRESETS[fi][1]; toast('Filter: ' + PRESETS[fi][1], '🎨'); };
+    }
     /* playlists: autoplay the next video when this one ends */
     V.addEventListener('ended', () => {
       try {
@@ -1711,6 +1834,11 @@
         ? '<input value="@' + esc(S.auth.username) + '" disabled><p class="muted-txt">locked to your account</p>'
         : '<input id="stName" maxlength="40" value="' + esc(c.name) + '" required>') + '</div>'
       + '<div class="field"><label>Bio</label><textarea id="stBio" rows="4" placeholder="Tell the world about your vibe…">' + esc(c.bio || '') + '</textarea></div>'
+      + '<div class="field"><label>Social links</label><div class="links-row">'
+      + '<input id="stYt" placeholder="YouTube URL" value="' + esc((c.links && c.links.yt) || '') + '">'
+      + '<input id="stTg" placeholder="Telegram URL" value="' + esc((c.links && c.links.tg) || '') + '">'
+      + '<input id="stIg" placeholder="Instagram URL" value="' + esc((c.links && c.links.ig) || '') + '">'
+      + '</div><p class="muted-txt">shown on your channel as buttons ▶ ✈ 📷</p></div>'
       + '<div class="field"><label>Profile picture</label><div class="file-row">'
       + '<button type="button" class="pill-btn ghost" id="avaBtn">🖼 Choose avatar</button>'
       + '<input type="file" id="avaIn" accept="image/*" hidden><span class="muted-txt" id="avaMsg"></span></div></div>'
@@ -1767,7 +1895,9 @@
     $('#banIn').onchange = async e => {
       const f = e.target.files[0]; if (!f) return;
       $('#banMsg').textContent = 'processing…';
-      banData = await imageToDataURL(f, 960, 220);
+      banData = /gif$/i.test(f.type)
+        ? await new Promise(res => { const rd = new FileReader(); rd.onload = () => res(rd.result); rd.readAsDataURL(f); })
+        : await imageToDataURL(f, 960, 220);
       $('#banMsg').textContent = banData ? '✅ ready' : '⚠️ could not read image (try a JPG/PNG)';
       if (banData) {
         const b = $('#prevBanner'); b.classList.add('has-img'); b.style.backgroundImage = 'url(' + banData + ')';
@@ -1784,6 +1914,7 @@
         S.myChannel.name = name;
       }
       S.myChannel.bio = $('#stBio').value.trim();
+      S.myChannel.links = { yt: ($('#stYt') && $('#stYt').value || '').trim(), tg: ($('#stTg') && $('#stTg').value || '').trim(), ig: ($('#stIg') && $('#stIg').value || '').trim() };
       S.myChannel.avatar = avaData;
       S.myChannel.banner = banData;
       YV.store.save();
@@ -1793,12 +1924,24 @@
         api('/api/auth/profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ avatar: avaData, banner: banData, bio: $('#stBio').value.trim(), color: $('#stColor') ? $('#stColor').value : undefined })
+          body: JSON.stringify({ avatar: avaData, banner: banData, bio: $('#stBio').value.trim(), color: $('#stColor') ? $('#stColor').value : undefined, links: S.myChannel.links })
         }).then(() => { AVATARS[S.auth.username.toLowerCase()] = avaData; navigate(); }).catch(() => {});
       }
       toast('Channel updated', '✨');
       location.hash = '#/channel';
     };
+    /* restore social links from the account */
+    if (S.auth && S.auth.token) {
+      api('/api/auth/me').then(me => {
+        if (me && me.links) {
+          S.myChannel.links = me.links;
+          const yt = $('#stYt'), tg = $('#stTg'), ig = $('#stIg');
+          if (yt) yt.value = me.links.yt || '';
+          if (tg) tg.value = me.links.tg || '';
+          if (ig) ig.value = me.links.ig || '';
+        }
+      }).catch(() => {});
+    }
   }
 
   /* ═══════════ state toggles + UI sync ═══════════ */
@@ -3261,6 +3404,7 @@ const routes = [
     [/^\/live\/([\w-]+)$/,   m => viewLiveStream(m[1])],
     [/^\/channel$/,           () => viewMyChannel()],
     [/^\/c\/(.+)$/,           m => viewChannel(m[1])],
+    [/^\/tag\/(.+)$/,         m => viewTag(decodeURIComponent(m[1]))],
     [/^\/watch\/([\w-]+)$/,   m => viewWatch(m[1])],
     [/^\/results$/,           q => viewResults(q)],
   ];
@@ -3276,6 +3420,14 @@ const routes = [
   }
 
   function navigate() {
+    /* mini-player: a playing video follows you across pages */
+    const curVid = document.querySelector('#yvVideo');
+    const tgtWatch = /^\/watch\/([\w-]+)$/.exec((location.hash.slice(1) || '/'));
+    if (miniBox && tgtWatch && miniBox.vid === tgtWatch[1]) closeMiniPlayer();
+    if (curVid && !curVid.paused && curVid.currentTime > 2 && !(tgtWatch && tgtWatch[1] === curVid.dataset.vid)) {
+      const ttlEl = document.querySelector('.w-title');
+      showMiniPlayer(curVid, curVid.dataset.vid, ttlEl ? ttlEl.textContent : '');
+    }
     runCleanups();
     const h = location.hash.slice(1) || '/';
     const qi = h.indexOf('?');
