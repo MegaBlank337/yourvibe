@@ -89,9 +89,11 @@ app.post('/api/videos/bunny', async (req, res) => {
 
     const embedUrl = 'https://iframe.mediadelivery.net/' + BUNNY_LIBRARY + '/' + guid;
 
-    await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes,store,bunny_guid)
-             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'bunny',$15)`,
-      [guid, title, description, category, type, duration, uploader, 'bunny:'+guid, null, embedUrl, thumbUrl, delKey, 1, '[0]', guid]);
+    const trimS = Math.max(0, Math.min(7200, parseInt(String(b.trimStart || '0'), 10) || 0));
+    const trimE = Math.max(0, Math.min(7200, parseInt(String(b.trimEnd || '0'), 10) || 0));
+    await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes,store,bunny_guid,trim_start,trim_end)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'bunny',$15,$16,$17)`,
+      [guid, title, description, category, type, duration, uploader, 'bunny:'+guid, null, embedUrl, thumbUrl, delKey, 1, '[0]', guid, trimS, trimE]);
 
     try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [uploader]); } catch (e) {}
 
@@ -297,6 +299,13 @@ async function migrate() {
   await q(`create table if not exists playlist_items (id bigserial primary key, playlist_id bigint references playlists(id) on delete cascade, video_id uuid references videos(id) on delete cascade, ord int default 0)`);
   await q(`create table if not exists stream_subs (creator text, user_name text, primary key (creator, user_name))`);
   await q(`alter table support add column if not exists ai boolean default false`);
+  await q(`alter table videos add column if not exists trim_start int`);
+  await q(`alter table videos add column if not exists trim_end int`);
+  await q(`alter table videos add column if not exists music_url text`);
+  await q(`alter table videos add column if not exists subtitles jsonb`);
+  await q(`alter table videos add column if not exists collabs jsonb default '[]'`);
+  await q(`create table if not exists stream_schedule (id bigserial primary key, creator text, title text, "when" timestamptz)`);
+  await q(`create table if not exists dms (id bigserial primary key, from_u text, to_u text, text text, created_at timestamptz default now(), read boolean default false)`);
   await q(`alter table users add column if not exists links jsonb`);
   await q(`alter table videos add column if not exists bunny_guid text`);
   await q(`update videos set bunny_guid = replace(video_path, 'bunny:', '') where store = 'bunny' and bunny_guid is null`);
@@ -959,9 +968,11 @@ app.post('/api/videos/complete', async (req, res) => {
     const authName = await authUser(req);
     const uploader = authName || String(b.uploader || 'Anonymous').slice(0, 50);
 
-    await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes,store)
-             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-      [id, title, description, category, type, duration, uploader, videoPath, thumbPath, partUrl0, thumbUrl, delKey, parts, JSON.stringify(sizes), store]);
+    const trimS = Math.max(0, Math.min(7200, parseInt(String(b.trimStart || '0'), 10) || 0));
+    const trimE = Math.max(0, Math.min(7200, parseInt(String(b.trimEnd || '0'), 10) || 0));
+    await q(`insert into videos (id,title,description,category,type,duration,uploader,video_path,thumb_path,video_url,thumb_url,del_key,parts,sizes,store,trim_start,trim_end)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+      [id, title, description, category, type, duration, uploader, videoPath, thumbPath, partUrl0, thumbUrl, delKey, parts, JSON.stringify(sizes), store, trimS, trimE]);
 
     /* every uploader gets a creators row so subscriber counts always exist */
     try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [uploader]); } catch (e) {}
@@ -1485,6 +1496,148 @@ app.get('/api/thumb/:id', async (req, res) => {
   } catch (e) { res.status(500).end(); }
 });
 
+/* ── v101: subtitles / music / collabs / schedule / DM ── */
+const vidOwner = async (req, id) => {
+  const authName = await authUser(req);
+  const row = await q('select uploader from videos where id = $1', [id]);
+  return (authName && row.rows.length && authName === row.rows[0].uploader) || req.get('x-admin-key') === ADMIN_KEY;
+};
+
+app.post('/api/videos/:id/subs', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!await vidOwner(req, id)) return res.status(403).json({ error: 'not owner' });
+    const subs = (req.body && Array.isArray(req.body.subs)) ? req.body.subs.slice(0, 800) : [];
+    await q('update videos set subtitles = $2 where id = $1', [id, JSON.stringify(subs)]);
+    res.json({ ok: true, count: subs.length });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.post('/api/videos/:id/music', (req, res) => {
+  const id = req.params.id;
+  vidOwner(req, id).then(async ok => {
+    if (!ok) return res.status(403).json({ error: 'not owner' });
+    let handled = false;
+    const bb = Busboy({ headers: req.headers, limits: { fileSize: 12 * 1024 * 1024, files: 1 } });
+    bb.on('file', (f, file) => {
+      if (handled) { file.resume(); return; }
+      handled = true;
+      const chunks = [];
+      file.on('data', c => chunks.push(c));
+      file.on('end', async () => {
+        try {
+          const p = 'music/' + id + '.mp3';
+          await sbPut(p, Buffer.concat(chunks), 'audio/mpeg');
+          await q('update videos set music_url = $2 where id = $1', [id, pubUrl(p)]);
+          res.json({ ok: true, url: pubUrl(p) });
+        } catch (e) { res.status(500).json({ error: 'failed' }); }
+      });
+    });
+    bb.on('error', () => res.status(500).json({ error: 'failed' }));
+    req.pipe(bb);
+  }).catch(() => res.status(500).json({ error: 'failed' }));
+});
+
+app.post('/api/videos/:id/collab', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!await vidOwner(req, id)) return res.status(403).json({ error: 'not owner' });
+    const creator = String((req.body && req.body.creator) || '').trim().slice(0, 50);
+    if (!creator) return res.status(400).json({ error: 'missing creator' });
+    const row = await q('select collabs from videos where id = $1', [id]);
+    const arr = Array.isArray(row.rows[0] && row.rows[0].collabs) ? row.rows[0].collabs : [];
+    if (!arr.includes(creator)) arr.push(creator);
+    await q('update videos set collabs = $2 where id = $1', [id, JSON.stringify(arr)]);
+    try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [creator]); } catch (e) {}
+    res.json({ ok: true, collabs: arr });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.delete('/api/videos/:id/collab', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!await vidOwner(req, id)) return res.status(403).json({ error: 'not owner' });
+    const creator = String((req.body && req.body.creator) || '').trim().slice(0, 50);
+    const row = await q('select collabs from videos where id = $1', [id]);
+    const arr = (Array.isArray(row.rows[0] && row.rows[0].collabs) ? row.rows[0].collabs : []).filter(c => c !== creator);
+    await q('update videos set collabs = $2 where id = $1', [id, JSON.stringify(arr)]);
+    res.json({ ok: true, collabs: arr });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.get('/api/schedule/:creator', async (req, res) => {
+  try {
+    const r = await q('select id, title, "when" from stream_schedule where creator = $1 order by "when" asc limit 50', [String(req.params.creator || '').slice(0, 50)]);
+    res.json(r.rows);
+  } catch (e) { res.json([]); }
+});
+
+app.post('/api/schedule', async (req, res) => {
+  try {
+    const authName = await authUser(req);
+    if (!authName) return res.status(401).json({ error: 'log in' });
+    const title = String((req.body && req.body.title) || '').trim().slice(0, 120);
+    const when = new Date(String((req.body && req.body.when) || ''));
+    if (!title || isNaN(when.getTime())) return res.status(400).json({ error: 'bad fields' });
+    const r = await q('insert into stream_schedule (creator, title, "when") values ($1, $2, $3) returning id, title, "when"', [authName, title, when.toISOString()]);
+    res.status(201).json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.delete('/api/schedule/:id', async (req, res) => {
+  try {
+    const authName = await authUser(req);
+    if (!authName) return res.status(401).json({ error: 'log in' });
+    await q('delete from stream_schedule where id = $1 and creator = $2', [parseInt(req.params.id, 10) || 0, authName]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+/* ── direct messages ── */
+app.get('/api/dm/inbox', async (req, res) => {
+  try {
+    const me = await authUser(req);
+    if (!me) return res.status(401).json({ error: 'log in' });
+    const r = await q(
+      "select peer, max(id) as last_id, count(*) filter (where read = false and to_u = $1) as unread, (array_agg(text order by id desc))[1] as last_text from (select case when from_u = $1 then to_u else from_u end as peer, id, text, to_u, read from dms where from_u = $1 or to_u = $1) t group by peer order by last_id desc limit 100", [me]);
+    res.json(r.rows);
+  } catch (e) { res.json([]); }
+});
+
+app.get('/api/dm/:peer', async (req, res) => {
+  try {
+    const me = await authUser(req);
+    if (!me) return res.status(401).json({ error: 'log in' });
+    const peer = String(req.params.peer || '').slice(0, 50);
+    const r = await q('select id, from_u, to_u, text, created_at from dms where (from_u = $1 and to_u = $2) or (from_u = $2 and to_u = $1) order by id asc limit 300', [me, peer]);
+    res.json(r.rows);
+  } catch (e) { res.json([]); }
+});
+
+app.post('/api/dm/:peer', async (req, res) => {
+  try {
+    const me = await authUser(req);
+    if (!me) return res.status(401).json({ error: 'log in' });
+    const peer = String(req.params.peer || '').slice(0, 50);
+    const text = String((req.body && req.body.text) || '').trim().slice(0, 1000);
+    if (!text) return res.status(400).json({ error: 'empty' });
+    const wait = cdCheck('dm:' + me, 3);
+    if (wait) return res.status(429).json({ error: 'cooldown ' + wait + 's' });
+    const r = await q('insert into dms (from_u, to_u, text) values ($1, $2, $3) returning id, from_u, to_u, text, created_at', [me, peer, text]);
+    res.status(201).json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.post('/api/dm/:peer/read', async (req, res) => {
+  try {
+    const me = await authUser(req);
+    if (!me) return res.status(401).json({ error: 'log in' });
+    const peer = String(req.params.peer || '').slice(0, 50);
+    await q('update dms set read = true where to_u = $1 and from_u = $2', [me, peer]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
 /* ── ADMIN (panel opens with F4 in the app) ── */
 
 
@@ -1928,7 +2081,7 @@ app.get('/api/live/:id/playlist', (req, res) => {
   const elapsed = Math.max(1, Math.round((Date.now() - st.startedAt) / 1000));
   const natural = Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + elapsed * st.viewersRate + crypto.randomInt(15)));
   const viewers = Math.max(0, natural + (st.viewersBoost || 0));
-  res.json({ status: st.status, title: st.title, broadcaster: st.broadcaster, segs: st.segs, startedAt: st.startedAt, thumb: st.thumbUrl, mime: st.mime || '', reacts: (st.reacts || []).slice(-25), viewers });
+  res.json({ status: st.status, title: st.title, broadcaster: st.broadcaster, segs: st.segs, startedAt: st.startedAt, thumb: st.thumbUrl, mime: st.mime || '', reacts: (st.reacts || []).slice(-25), guestSegs: (st.guestSegs || []).slice(-2), quiz: st.quiz || null, viewers });
 });
 
 /* viewer sends a floating emoji reaction */
@@ -1942,6 +2095,93 @@ app.post('/api/live/:id/react', (req, res) => {
   st.reacts.push({ id: st.reactN, e, ts: Date.now() });
   if (st.reacts.length > 40) st.reacts.splice(0, st.reacts.length - 40);
   res.json({ ok: true, id: st.reactN });
+});
+
+/* ── co-host: the guest uploads camera chunks directly to storage ── */
+app.post('/api/live/:id/guest-link', async (req, res) => {
+  const st = liveStreams.get(req.params.id);
+  if (!st || st.status !== 'live') return res.status(404).json({ error: 'stream not found' });
+  if (req.get('x-auth') !== st.token) return res.status(403).json({ error: 'not the broadcaster' });
+  if (!st.guest) st.guest = { token: crypto.randomBytes(16).toString('hex'), segs: [], n: 0 };
+  const base = req.protocol + '://' + req.get('host');
+  res.json({ url: base + '/#/guest/' + req.params.id + '?t=' + st.guest.token, token: st.guest.token });
+});
+
+app.get('/api/live/:id/guest-sign', async (req, res) => {
+  try {
+    const st = liveStreams.get(req.params.id);
+    if (!st || st.status !== 'live' || !st.guest) return res.status(404).json({ error: 'no guest slot' });
+    if (String(req.query.token || '') !== st.guest.token) return res.status(403).json({ error: 'bad token' });
+    const i = Math.max(0, parseInt(String(req.query.i || '0'), 10) || 0);
+    const path = 'live/' + req.params.id + '/guest' + i + '.webm';
+    const sr = await fetch(SB_URL + '/storage/v1/object/upload/sign/' + 'media' + '/' + path, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    if (!sr.ok) return res.status(500).json({ error: 'sign failed' });
+    const sj = await sr.json();
+    st.guest.n = Math.max(st.guest.n, i + 1);
+    st.guestSegs = st.guestSegs || [];
+    const pub = pubUrl(path);
+    st.guestSegs.push(pub);
+    if (st.guestSegs.length > 6) st.guestSegs.splice(0, st.guestSegs.length - 6);
+    res.json({ upload: SB_URL + sj.url + '?token=' + sj.token, pub });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+/* ── live quiz (host) + voting (viewers) ── */
+app.post('/api/live/:id/quiz', (req, res) => {
+  const st = liveStreams.get(req.params.id);
+  if (!st || st.status !== 'live') return res.status(404).json({ error: 'stream not found' });
+  if (req.get('x-auth') !== st.token) return res.status(403).json({ error: 'not the broadcaster' });
+  const q = String((req.body && req.body.q) || '').trim().slice(0, 200);
+  const options = Array.isArray(req.body && req.body.options) ? req.body.options.map(o => String(o).trim().slice(0, 60)).filter(Boolean).slice(0, 6) : [];
+  if (!q || options.length < 2) return res.status(400).json({ error: 'question + 2 options needed' });
+  st.quiz = { q, options, votes: options.map(() => 0), open: true };
+  res.json({ ok: true, quiz: st.quiz });
+});
+
+app.post('/api/live/:id/quiz-vote', (req, res) => {
+  const st = liveStreams.get(req.params.id);
+  if (!st || !st.quiz || !st.quiz.open) return res.status(404).json({ error: 'no open quiz' });
+  const opt = parseInt((req.body && req.body.opt), 10);
+  if (!(opt >= 0 && opt < st.quiz.options.length)) return res.status(400).json({ error: 'bad option' });
+  st.quiz.votes[opt] = (st.quiz.votes[opt] || 0) + 1;
+  res.json({ ok: true, votes: st.quiz.votes });
+});
+
+app.delete('/api/live/:id/quiz', (req, res) => {
+  const st = liveStreams.get(req.params.id);
+  if (!st) return res.status(404).json({ error: 'stream not found' });
+  if (req.get('x-auth') !== st.token && req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+  st.quiz = null;
+  res.json({ ok: true });
+});
+
+/* admin launches a quiz on the current stream */
+app.post('/api/admin/live/quiz', async (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    const q = String((req.body && req.body.q) || '').trim().slice(0, 200);
+    const options = Array.isArray(req.body && req.body.options) ? req.body.options.map(o => String(o).trim().slice(0, 60)).filter(Boolean).slice(0, 6) : [];
+    if (!q || options.length < 2) return res.status(400).json({ error: 'question + 2 options needed' });
+    let target = null;
+    liveStreams.forEach(st => { if (st.status === 'live' && (!target || st.startedAt > target.startedAt)) target = st; });
+    if (!target) return res.status(404).json({ error: 'no live stream running' });
+    target.quiz = { q, options, votes: options.map(() => 0), open: true };
+    res.json({ ok: true, id: target.id, title: target.title });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.delete('/api/admin/live/quiz', (req, res) => {
+  try {
+    if (req.get('x-admin-key') !== ADMIN_KEY) return res.status(403).json({ error: 'forbidden' });
+    let target = null;
+    liveStreams.forEach(st => { if (st.status === 'live' && (!target || st.startedAt > target.startedAt)) target = st; });
+    if (target) target.quiz = null;
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
 
 /* admin launches an emoji burst on the current stream */
@@ -2002,6 +2242,10 @@ app.post('/api/live/:id/end', async (req, res) => {
   if (!st) return res.status(404).json({ error: 'not found' });
   if (req.get('x-auth') !== st.token) return res.status(403).json({ error: 'not the broadcaster' });
   st.status = 'ended';
+  try {
+    const subsIn = (req.body && Array.isArray(req.body.subs)) ? req.body.subs.slice(0, 500) : null;
+    if (subsIn && subsIn.length) await q('update videos set subtitles = $2 where id = $1', [st.id, JSON.stringify(subsIn)]);
+  } catch (e) {}
   const durSec = Math.max(1, Math.round((Date.now() - st.startedAt) / 1000));
   const duration = Math.floor(durSec / 60) + ':' + String(durSec % 60).padStart(2, '0');
   const peak = Math.max(1, Math.min(Math.round(st.viewersBase * 4), Math.round(st.viewersBase + durSec * st.viewersRate)) + (st.viewersBoost || 0));
