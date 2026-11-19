@@ -297,6 +297,7 @@ async function migrate() {
   await q(`create table if not exists playlist_items (id bigserial primary key, playlist_id bigint references playlists(id) on delete cascade, video_id uuid references videos(id) on delete cascade, ord int default 0)`);
   await q(`create table if not exists stream_subs (creator text, user_name text, primary key (creator, user_name))`);
   await q(`alter table support add column if not exists ai boolean default false`);
+  await q(`alter table users add column if not exists links jsonb`);
   await q(`alter table videos add column if not exists bunny_guid text`);
   await q(`update videos set bunny_guid = replace(video_path, 'bunny:', '') where store = 'bunny' and bunny_guid is null`);
   await q(`alter table videos add column if not exists merge_state text default 'idle'`);
@@ -598,7 +599,7 @@ app.get('/api/boot', async (req, res) => {
     const u = await authUser(req);
     if (u) {
       try {
-        const r = await q('select username, avatar_url, banner_url, bio from users where username = $1', [u]);
+        const r = await q('select username, avatar_url, banner_url, bio, links from users where username = $1', [u]);
         me = r.rows[0] || { username: u };
         const crc = await q('select color from creators where name = $1', [u]);
         if (crc.rows.length && crc.rows[0].color) me.channel_color = crc.rows[0].color;
@@ -655,9 +656,9 @@ app.get('/api/auth/me', async (req, res) => {
   const username = await authUser(req);
   if (!username) return res.status(401).json({ error: 'not logged in' });
   try {
-    const r = await q('select username, avatar_url, banner_url, bio from users where username = $1', [username]);
+    const r = await q('select username, avatar_url, banner_url, bio, links from users where username = $1', [username]);
     const u = r.rows[0] || {};
-    res.json({ username, avatar_url: u.avatar_url || null, banner_url: u.banner_url || null, bio: u.bio || null });
+    res.json({ username, avatar_url: u.avatar_url || null, banner_url: u.banner_url || null, bio: u.bio || null, links: u.links || null });
   } catch (e) { res.json({ username }); }
 });
 
@@ -697,6 +698,10 @@ app.post('/api/auth/profile', async (req, res) => {
       const bio = String(b.bio || '').slice(0, 1000);
       await q('update users set bio = $2 where username = $1', [username, bio]);
       out.bio = bio;
+    }
+    if (b.links !== undefined) {
+      await q('update users set links = $2 where username = $1', [username, b.links ? JSON.stringify(b.links) : null]);
+      out.links = b.links || null;
     }
     if (b.banner) {
       if (!String(b.banner).startsWith('data:image/') || String(b.banner).length > 2000000) return res.status(400).json({ error: 'bad banner' });
@@ -1160,6 +1165,15 @@ app.post('/api/videos/:id/comments', async (req, res) => {
     const r = parent
       ? await q('insert into comments (video_id, author, text, parent_id) values ($1,$2,$3,$4) returning id, author, text, created_at, parent_id, likes', [req.params.id, author, text, parent])
       : await q('insert into comments (video_id, author, text) values ($1,$2,$3) returning id, author, text, created_at, parent_id, likes', [req.params.id, author, text]);
+    /* @mentions → notifications for registered users */
+    try {
+      const handles = [...new Set((text.match(/@([a-zA-Z0-9_]{2,20})/g) || []).map(h => h.slice(1).toLowerCase()))].slice(0, 3);
+      for (const h of handles) {
+        if (h === author.toLowerCase()) continue;
+        const u = await q('select username from users where lower(username) = $1', [h]);
+        if (u.rows.length) await q('insert into notifications (text, target) values ($1, $2)', ['💬 ' + author + ' mentioned you: ' + text.slice(0, 70), u.rows[0].username]);
+      }
+    } catch (e) {}
     res.status(201).json(r.rows[0]);
   } catch (e) { res.status(500).json({ error: 'db down' }); }
 });
@@ -1473,6 +1487,14 @@ app.get('/api/thumb/:id', async (req, res) => {
 
 /* ── ADMIN (panel opens with F4 in the app) ── */
 
+
+/* public social links of a channel */
+app.get('/api/channels/:name/links', async (req, res) => {
+  try {
+    const r = await q('select links from users where lower(username) = $1', [String(req.params.name || '').toLowerCase()]);
+    res.json({ links: (r.rows[0] && r.rows[0].links) || null });
+  } catch (e) { res.json({ links: null }); }
+});
 
 app.post('/api/admin/creator/color', async (req, res) => {
   try {
