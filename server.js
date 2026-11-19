@@ -575,7 +575,7 @@ const clientIp = req => String((req.headers && req.headers['x-forwarded-for']) |
 /* ONE round-trip boot: feed + creators + avatars + announcement + account */
 app.get('/api/boot', async (req, res) => {
   try {
-    const vids = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,sizes,store,created_at
+    const vids = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,sizes,store,created_at,trim_start,trim_end,music_url,subtitles,collabs
                           from videos order by created_at desc limit 200`);
     let creators = {};
     const verifiedNames = [];
@@ -796,7 +796,7 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/api/videos', async (req, res) => {
   try {
-    const r = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,sizes,store,created_at
+    const r = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,sizes,store,created_at,trim_start,trim_end,music_url,subtitles,collabs
                        from videos order by created_at desc limit 200`);
     res.json(r.rows.map(row => Object.assign({}, row, {
       views: num(row.views), likes: num(row.likes),
