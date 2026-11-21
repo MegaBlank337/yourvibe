@@ -304,6 +304,7 @@ async function migrate() {
   await q(`alter table videos add column if not exists music_url text`);
   await q(`alter table videos add column if not exists subtitles jsonb`);
   await q(`alter table videos add column if not exists collabs jsonb default '[]'`);
+  await q(`alter table videos add column if not exists quality_max text`);
   await q(`create table if not exists stream_schedule (id bigserial primary key, creator text, title text, "when" timestamptz)`);
   await q(`create table if not exists dms (id bigserial primary key, from_u text, to_u text, text text, created_at timestamptz default now(), read boolean default false)`);
   await q(`alter table videos add column if not exists visibility text default 'public'`);
@@ -581,7 +582,7 @@ const clientIp = req => String((req.headers && req.headers['x-forwarded-for']) |
 /* ONE round-trip boot: feed + creators + avatars + announcement + account */
 app.get('/api/boot', async (req, res) => {
   try {
-    const vids = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,sizes,store,created_at,trim_start,trim_end,music_url,subtitles,collabs,visibility,comments_enabled
+    const vids = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,sizes,store,created_at,trim_start,trim_end,music_url,subtitles,collabs,visibility,comments_enabled,quality_max
                           from videos order by created_at desc limit 200`);
     let creators = {};
     const verifiedNames = [];
@@ -1604,6 +1605,31 @@ app.post('/api/collab-invites/:id/decline', async (req, res) => {
 });
 
 /* per-video settings (owner) */
+/* owner sets the max quality — Bunny gets the allowed resolutions list */
+app.post('/api/videos/:id/quality', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!await vidOwner(req, id)) return res.status(403).json({ error: 'not owner' });
+    if (!BUNNY_API_KEY || !BUNNY_LIBRARY) return res.status(500).json({ error: 'bunny not configured' });
+    const chosen = String((req.body && req.body.max) || '').trim();
+    const ORDER = ['240p', '360p', '480p', '720p', '1080p'];
+    const cut = ORDER.indexOf(chosen);
+    if (cut < 0) return res.status(400).json({ error: 'bad max' });
+    const avail = ORDER.slice(0, cut + 1).join(',');
+    const r = await q('select bunny_guid, store from videos where id = $1', [id]);
+    if (!r.rows.length || r.rows[0].store !== 'bunny' || !r.rows[0].bunny_guid) return res.status(400).json({ error: 'not a bunny video' });
+    const guid = r.rows[0].bunny_guid;
+    const up = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + guid, {
+      method: 'POST',
+      headers: { AccessKey: BUNNY_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ availableResolutions: avail })
+    });
+    if (!up.ok) return res.status(500).json({ error: 'bunny ' + up.status + ' ' + (await up.text()).slice(0, 100) });
+    await q('update videos set quality_max = $2 where id = $1', [id, chosen]);
+    res.json({ ok: true, max: chosen, availableResolutions: avail });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
 app.post('/api/videos/:id/settings', async (req, res) => {
   try {
     const id = req.params.id;
