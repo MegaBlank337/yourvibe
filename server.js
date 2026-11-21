@@ -247,13 +247,13 @@ async function getPool() {
 }
 
 async function q(sql, params) {
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
     try {
       const pool = await getPool();
       return await pool.query(sql, params);
     } catch (e) {
-      if (attempt === 3) throw e;
-      await new Promise(r => setTimeout(r, 350));
+      if (attempt === 5) throw e;
+      await new Promise(r => setTimeout(r, 350 * attempt)); // 0.35s / 0.7s / 1.05s / 1.4s
     }
   }
 }
@@ -306,6 +306,9 @@ async function migrate() {
   await q(`alter table videos add column if not exists collabs jsonb default '[]'`);
   await q(`create table if not exists stream_schedule (id bigserial primary key, creator text, title text, "when" timestamptz)`);
   await q(`create table if not exists dms (id bigserial primary key, from_u text, to_u text, text text, created_at timestamptz default now(), read boolean default false)`);
+  await q(`alter table videos add column if not exists visibility text default 'public'`);
+  await q(`alter table videos add column if not exists comments_enabled boolean default true`);
+  await q(`create table if not exists collab_invites (id bigserial primary key, video_id uuid references videos(id) on delete cascade, creator text, inviter text, status text default 'pending', created_at timestamptz default now)`);
   await q(`alter table users add column if not exists links jsonb`);
   await q(`alter table videos add column if not exists bunny_guid text`);
   await q(`update videos set bunny_guid = replace(video_path, 'bunny:', '') where store = 'bunny' and bunny_guid is null`);
@@ -382,6 +385,9 @@ async function authUser(req) {
     return r.rows.length ? r.rows[0].username : null;
   } catch (e) { return null; }
 }
+
+/* pool keepalive: a tiny query every 25s keeps idle connections alive */
+setInterval(() => { q('select 1').catch(() => {}); }, 25000);
 
 /* retry migration until it works (DB may not be ready on first boot) */
 (function migrateLoop() {
@@ -575,7 +581,7 @@ const clientIp = req => String((req.headers && req.headers['x-forwarded-for']) |
 /* ONE round-trip boot: feed + creators + avatars + announcement + account */
 app.get('/api/boot', async (req, res) => {
   try {
-    const vids = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,sizes,store,created_at,trim_start,trim_end,music_url,subtitles,collabs
+    const vids = await q(`select id,title,description,category,type,duration,uploader,thumb_url,video_url,views,likes,parts,sizes,store,created_at,trim_start,trim_end,music_url,subtitles,collabs,visibility,comments_enabled
                           from videos order by created_at desc limit 200`);
     let creators = {};
     const verifiedNames = [];
@@ -1538,18 +1544,81 @@ app.post('/api/videos/:id/music', (req, res) => {
   }).catch(() => res.status(500).json({ error: 'failed' }));
 });
 
-app.post('/api/videos/:id/collab', async (req, res) => {
+/* collab INVITE: the owner invites a creator — they accept or decline */
+app.post('/api/videos/:id/collab-invite', async (req, res) => {
   try {
     const id = req.params.id;
     if (!await vidOwner(req, id)) return res.status(403).json({ error: 'not owner' });
     const creator = String((req.body && req.body.creator) || '').trim().slice(0, 50);
     if (!creator) return res.status(400).json({ error: 'missing creator' });
-    const row = await q('select collabs from videos where id = $1', [id]);
+    const u = await q('select username from users where lower(username) = $1', [creator.toLowerCase()]);
+    if (!u.rows.length) return res.status(404).json({ error: 'no such registered user' });
+    const vt = await q('select title, uploader from videos where id = $1', [id]);
+    if (!vt.rows.length) return res.status(404).json({ error: 'video not found' });
+    if (vt.rows[0].uploader.toLowerCase() === u.rows[0].username.toLowerCase()) return res.status(400).json({ error: 'already your video' });
+    const dup = await q("select id from collab_invites where video_id = $1 and creator = $2 and status = 'pending'", [id, u.rows[0].username]);
+    if (dup.rows.length) return res.status(400).json({ error: 'invite already pending' });
+    const inv = await q('insert into collab_invites (video_id, creator, inviter, status) values ($1, $2, $3, \'pending\') returning id', [id, u.rows[0].username, vt.rows[0].uploader]);
+    await q('insert into notifications (text, target) values ($1, $2)', ['👥 ' + vt.rows[0].uploader + ' invited you to collaborate on «' + (vt.rows[0].title || '').slice(0, 50) + '» — open Library to accept', u.rows[0].username]);
+    res.json({ ok: true, invite: inv.rows[0] });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+/* my pending collab invites */
+app.get('/api/collab-invites', async (req, res) => {
+  try {
+    const me = await authUser(req);
+    if (!me) return res.status(401).json({ error: 'log in' });
+    const r = await q(`select ci.id, ci.video_id, ci.inviter, ci.created_at, v.title
+                        from collab_invites ci join videos v on v.id = ci.video_id
+                        where ci.creator = $1 and ci.status = 'pending' order by ci.id desc limit 50`, [me]);
+    res.json(r.rows);
+  } catch (e) { res.json([]); }
+});
+
+app.post('/api/collab-invites/:id/accept', async (req, res) => {
+  try {
+    const me = await authUser(req);
+    if (!me) return res.status(401).json({ error: 'log in' });
+    const iid = parseInt(req.params.id, 10) || 0;
+    const inv = await q("select video_id, creator, inviter, status from collab_invites where id = $1 and creator = $2 and status = 'pending'", [iid, me]);
+    if (!inv.rows.length) return res.status(404).json({ error: 'invite not found' });
+    const vid = inv.rows[0].video_id;
+    const row = await q('select collabs from videos where id = $1', [vid]);
     const arr = Array.isArray(row.rows[0] && row.rows[0].collabs) ? row.rows[0].collabs : [];
-    if (!arr.includes(creator)) arr.push(creator);
-    await q('update videos set collabs = $2 where id = $1', [id, JSON.stringify(arr)]);
-    try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [creator]); } catch (e) {}
+    if (!arr.includes(me)) arr.push(me);
+    await q('update videos set collabs = $2 where id = $1', [vid, JSON.stringify(arr)]);
+    await q("update collab_invites set status = 'accepted' where id = $1", [iid]);
+    try { await q('insert into creators (name, subs) values ($1, 0) on conflict (name) do nothing', [me]); } catch (e) {}
     res.json({ ok: true, collabs: arr });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.post('/api/collab-invites/:id/decline', async (req, res) => {
+  try {
+    const me = await authUser(req);
+    if (!me) return res.status(401).json({ error: 'log in' });
+    await q("delete from collab_invites where id = $1 and creator = $2 and status = 'pending'", [parseInt(req.params.id, 10) || 0, me]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+/* per-video settings (owner) */
+app.post('/api/videos/:id/settings', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!await vidOwner(req, id)) return res.status(403).json({ error: 'not owner' });
+    const b = req.body || {};
+    const sets = [], vals = [id];
+    const add = (col, val) => { vals.push(val); sets.push(col + ' = $' + vals.length); };
+    if (b.title !== undefined) add('title', String(b.title).trim().slice(0, 100) || 'Untitled vibe');
+    if (b.description !== undefined) add('description', String(b.description).slice(0, 2000));
+    if (b.category !== undefined) add('category', String(b.category).slice(0, 30));
+    if (b.visibility !== undefined) add('visibility', ['public', 'unlisted'].includes(b.visibility) ? b.visibility : 'public');
+    if (b.comments_enabled !== undefined) add('comments_enabled', !!b.comments_enabled);
+    if (!sets.length) return res.status(400).json({ error: 'nothing to update' });
+    await q('update videos set ' + sets.join(', ') + ' where id = $1', vals);
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
 
