@@ -1397,7 +1397,9 @@ app.get('/api/videos/:id/playurl', async (req, res) => {
 
     let host = null, dur = null;
     const bg = row.bunny_guid || (row.video_path || '').replace('bunny:', '');
+    console.error('[playurl DEBUG] id:', req.params.id, '| bg:', bg, '| LIB:', BUNNY_LIBRARY, '| KEY set:', !!BUNNY_KEY);
     const bv = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + bg, { headers: { AccessKey: BUNNY_KEY } });
+    console.error('[playurl DEBUG] bunny api:', bv.status);
     if (bv.ok) {
       info = await bv.json();
       try {
@@ -1416,7 +1418,7 @@ app.get('/api/videos/:id/playurl', async (req, res) => {
     }
     /* still encoding — report real progress so the page shows a % */
     return res.json({ processing: true, progress: info ? Math.round(info.encodeProgress || 0) : 0, play: row.video_url, thumb: row.thumb_url });
-  } catch (e) { res.status(500).json({ error: 'failed' }); }
+  } catch (e) { console.error('[playurl DEBUG] catch:', e.message); res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/videos/:id/poll', async (req, res) => {
