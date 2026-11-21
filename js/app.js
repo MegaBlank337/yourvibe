@@ -315,6 +315,62 @@
     };
   }
 
+  /* ── video settings modal (YouTube-Studio-like) ── */
+  async function videoSettingsFlow(id) {
+    const v = byId(id);
+    if (!v) return;
+    const isBunny = v.store === 'bunny';
+    let d = document.getElementById('vidSetModal');
+    if (d) d.remove();
+    d = document.createElement('div');
+    d.id = 'vidSetModal';
+    d.innerHTML = '<div class="admin-box"><div class="admin-head"><span>⚙ Video settings</span><button class="admin-close" id="vsClose">✕</button></div>'
+      + '<div style="padding:16px;display:flex;flex-direction:column;gap:12px;max-height:70vh;overflow-y:auto">'
+      + '<div class="field"><label>Title</label><input id="vsTitle" maxlength="100" value="' + esc(v.title) + '"></div>'
+      + '<div class="field"><label>Description</label><textarea id="vsDesc" rows="3">' + esc(v.description || '') + '</textarea></div>'
+      + '<div class="field-row">'
+      + '<div class="field"><label>Category</label><select id="vsCat">' + YV.CATS.map(c2 => '<option' + (c2 === v.category ? ' selected' : '') + '>' + c2 + '</option>').join('') + '</select></div>'
+      + '<div class="field"><label>Visibility</label><select id="vsVis"><option value="public"' + (v.visibility !== 'unlisted' ? ' selected' : '') + '>🌐 Public</option><option value="unlisted"' + (v.visibility === 'unlisted' ? ' selected' : '') + '>🔒 Unlisted</option></select></div>'
+      + '</div>'
+      + '<div class="field"><label>Comments</label><div class="radio-row">'
+      + '<label class="rd"><input type="radio" name="vsCom" value="on"' + (v.comments_enabled !== false ? ' checked' : '') + '> 💬 On</label>'
+      + '<label class="rd"><input type="radio" name="vsCom" value="off"' + (v.comments_enabled === false ? ' checked' : '') + '> 🚫 Off</label>'
+      + '</div></div>'
+      + '<div class="field"><label>Quality (bunny videos — CDN re-encodes to fit)</label>'
+      + (isBunny
+        ? '<select id="vsQual">'
+          + [['240p', '240p (mobile data saver)'], ['360p', '360p'], ['480p', '480p'], ['720p', '720p HD'], ['1080p', '1080p Full HD']].map(q2 =>
+            '<option value="' + q2[0] + '"' + (v.quality_max === q2[0] ? ' selected' : '') + '>' + q2[1] + '</option>').join('')
+          + '</select><p class="muted-txt">max quality — Bunny keeps every resolution below it</p>'
+        : '<p class="muted-txt">Multi-quality is available for bunny-hosted videos</p>')
+      + '</div>'
+      + '<button class="btn-neon" id="vsSave">💾 Save settings</button>'
+      + '</div></div>';
+    document.body.appendChild(d);
+    d.querySelector('#vsClose').onclick = () => d.remove();
+    d.querySelector('#vsSave').onclick = async () => {
+      try {
+        const body = {
+          title: d.querySelector('#vsTitle').value.trim(),
+          description: d.querySelector('#vsDesc').value,
+          category: d.querySelector('#vsCat').value,
+          visibility: d.querySelector('#vsVis').value,
+          comments_enabled: d.querySelector('input[name="vsCom"]:checked').value === 'on',
+        };
+        if (!body.title) { toast('Title needed', '⚠️'); return; }
+        await api('/api/videos/' + id + '/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const qs = d.querySelector('#vsQual');
+        if (qs && isBunny) {
+          try { await api('/api/videos/' + id + '/quality', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ max: qs.value }) }); } catch (e3) {}
+        }
+        toast('Settings saved ⚙', '✅');
+        d.remove();
+        await loadVideos();
+        navigate();
+      } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
+    };
+  }
+
   /* ── subtitles editor (owner) — lines "0:05 text" ── */
   function subsEditor(id) {
     const meta = byId(id) || {};
@@ -447,6 +503,24 @@
           toast('Playing playlist: ' + pl.name + ' ▶', '⏭');
         }
       } catch (e2) {}
+      return;
+    }
+    const ia = e.target.closest('[data-inv-accept]');
+    if (ia) {
+      try {
+        await api('/api/collab-invites/' + ia.dataset.invAccept + '/accept', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        toast('Collab accepted 👥 — the video is on your channel', '✅');
+        navigate();
+      } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
+      return;
+    }
+    const idecl = e.target.closest('[data-inv-decline]');
+    if (idecl) {
+      try {
+        await api('/api/collab-invites/' + idecl.dataset.invDecline + '/decline', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        toast('Invite declined', '👥');
+        navigate();
+      } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
       return;
     }
     const pd = e.target.closest('[data-pl-del]');
@@ -1034,6 +1108,15 @@
     const liked = Object.keys(S.likes).map(byId).filter(Boolean).filter(v => !isStream(v));
     const later = Object.keys(S.later).map(byId).filter(Boolean).filter(v => !isStream(v));
     const mine = VIDEOS.filter(v => v.uploader === myName() && !isStream(v));
+    let collabInvitesHTML = '';
+    try {
+      const invs = await api('/api/collab-invites');
+      collabInvitesHTML = invs.length ? '<div class="inv-list">' + invs.map(inv =>
+        '<div class="inv-row">👥 <b>' + esc(inv.inviter) + '</b> invites you to collaborate on «' + esc((inv.title || '').slice(0, 40)) + '»'
+        + '<span class="inv-btns"><button class="pill-btn" data-inv-accept="' + inv.id + '">✓ Accept</button>'
+        + '<button class="pill-btn danger" data-inv-decline="' + inv.id + '">✕</button></span></div>'
+      ).join('') + '</div>' : '';
+    } catch (e) { collabInvitesHTML = ''; }
     let playlistsHTML = '';
     try {
       const pls = await api('/api/playlists');
@@ -1050,6 +1133,7 @@
       : (hist.length ? shelf('🕘 History', hist.map(cardHTML).join(''), '<button class="pill-btn ghost" data-action="clear-history">Clear all</button>') : '')
         + (liked.length ? shelf('❤️ Liked videos', liked.map(cardHTML).join('')) : '')
         + (later.length ? shelf('⏳ Watch later', later.map(cardHTML).join('')) : '')
+        + (collabInvitesHTML ? shelf('👥 Collab invites', collabInvitesHTML) : '')
         + (playlistsHTML ? shelf('▶ Your playlists', playlistsHTML) : '')
         + (mine.length ? shelf('🎬 Your uploads', mine.map(cardHTML).join(''), '<a class="pill-btn ghost" href="#/channel">Manage</a>') : ''));
   }
@@ -1258,7 +1342,8 @@
       + '<button class="act-btn" data-action="pl-add" data-id="' + v.id + '">▶＋ Playlist</button>'
       + ((S.auth && S.auth.username === v.uploader) ? '<a class="act-btn" href="' + srcOf(v) + '" download="yourvibe-' + v.id.slice(0, 8) + '" title="Download your video">⬇ Download</a>' : '')
       + ((S.auth && S.auth.username === v.uploader) ? '<button class="act-btn" data-action="subs-edit" data-id="' + v.id + '">📝 Subs</button>' : '')
-      + ((S.auth && S.auth.username === v.uploader) ? '<button class="act-btn" data-action="collab-add" data-id="' + v.id + '">👥＋ Collab</button>' : '')
+      + ((S.auth && S.auth.username === v.uploader) ? '<button class="act-btn" data-action="collab-invite" data-id="' + v.id + '">👥 Collab</button>' : '')
+      + ((S.auth && S.auth.username === v.uploader) ? '<button class="act-btn" data-action="vid-settings" data-id="' + v.id + '">⚙ Settings</button>' : '')
       + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="act-btn danger" data-action="del" data-id="' + v.id + '">🗑 Delete</button>' : '')
       + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="act-btn" data-action="addpoll" data-id="' + v.id + '">📊 Poll</button>' : '')
       + '</div>'
@@ -3146,16 +3231,16 @@
     else if (a === 'short-comments') { e.preventDefault(); openShortComments(id); }
     else if (a === 'pl-add') { e.preventDefault(); plAddFlow(id); }
     else if (a === 'subs-edit') { e.preventDefault(); subsEditor(id); }
-    else if (a === 'collab-add') {
+    else if (a === 'collab-invite') {
       e.preventDefault();
-      const who = prompt('Add co-creator (exact username):');
+      const who = prompt('Invite co-creator (exact username):');
       if (!who) return;
       try {
-        await api('/api/videos/' + id + '/collab', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ creator: who.trim() }) });
-        toast('Co-creator added 👥', '✅');
-        navigate();
+        await api('/api/videos/' + id + '/collab-invite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ creator: who.trim() }) });
+        toast('Invite sent 👥 — they accept in Library', '✅');
       } catch (e2) { toast(e2.message || 'failed', '⚠️'); }
     }
+    else if (a === 'vid-settings') { e.preventDefault(); videoSettingsFlow(id); }
     else if (a === 'dm-open') {
       e.preventDefault();
       if (!(S.auth && S.auth.token)) { toast('Log in to use messages 🔒', '🔒'); return; }
