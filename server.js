@@ -305,6 +305,7 @@ async function migrate() {
   await q(`alter table videos add column if not exists subtitles jsonb`);
   await q(`alter table videos add column if not exists collabs jsonb default '[]'`);
   await q(`alter table videos add column if not exists quality_max text`);
+  await q(`create table if not exists video_views_daily (video_id uuid, day date, views int, primary key (video_id, day))`);
   await q(`create table if not exists stream_schedule (id bigserial primary key, creator text, title text, "when" timestamptz)`);
   await q(`create table if not exists dms (id bigserial primary key, from_u text, to_u text, text text, created_at timestamptz default now(), read boolean default false)`);
   await q(`alter table videos add column if not exists visibility text default 'public'`);
@@ -1156,6 +1157,8 @@ app.post('/api/videos/:id/like', async (req, res) => {
 app.post('/api/videos/:id/view', async (req, res) => {
   try {
     await q('update videos set views = views + 1 where id = $1', [req.params.id]);
+    await q(`insert into video_views_daily (video_id, day, views) values ($1, current_date, 1)
+             on conflict (video_id, day) do update set views = video_views_daily.views + 1`, [req.params.id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: 'db down' }); }
 });
@@ -1735,6 +1738,27 @@ app.post('/api/dm/:peer/read', async (req, res) => {
 
 /* ── ADMIN (panel opens with F4 in the app) ── */
 
+
+/* owner stats: views per day (last 14 days) */
+app.get('/api/videos/:id/stats', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const authName = await authUser(req);
+    const row = await q('select uploader, views, likes from videos where id = $1', [id]);
+    if (!row.rows.length) return res.status(404).json({ error: 'not found' });
+    const isOwner = (authName && authName === row.rows[0].uploader) || req.get('x-admin-key') === ADMIN_KEY;
+    if (!isOwner) return res.status(403).json({ error: 'not owner' });
+    const d = await q("select to_char(day, 'MM-DD') as day, views from video_views_daily where video_id = $1 and day >= current_date - 13 order by day asc", [id]);
+    const days = [];
+    for (let i = 13; i >= 0; i--) {
+      const dt = new Date(Date.now() - i * 86400000);
+      const key = ('0' + (dt.getMonth() + 1)).slice(-2) + '-' + ('0' + dt.getDate()).slice(-2);
+      const hit = d.rows.find(x => x.day === key);
+      days.push({ day: key, views: hit ? hit.views : 0 });
+    }
+    res.json({ total: row.rows[0].views, likes: row.rows[0].likes, days });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
 
 /* public social links of a channel */
 app.get('/api/channels/:name/links', async (req, res) => {
