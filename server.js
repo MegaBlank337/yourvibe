@@ -1760,6 +1760,30 @@ app.get('/api/videos/:id/stats', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
 
+/* channel stats: views per day across all creator videos */
+app.get('/api/channel-stats/:name', async (req, res) => {
+  try {
+    const name = String(req.params.name || '').slice(0, 50);
+    const me = await authUser(req);
+    if (!me || me.toLowerCase() !== name.toLowerCase()) return res.status(403).json({ error: 'not owner' });
+    const vids = await q('select id, views, likes from videos where uploader = $1', [name]);
+    const ids = vids.rows.map(x => String(x.id));
+    const totalViews = vids.rows.reduce((a, v) => a + (v.views || 0), 0);
+    const totalLikes = vids.rows.reduce((a, v) => a + (v.likes || 0), 0);
+    let days = [];
+    if (ids.length) {
+      const d = await q("select to_char(day, 'MM-DD') as day, sum(views)::int as views from video_views_daily where video_id in (" + ids.map(x => "'" + x + "'").join(',') + ") and day >= current_date - 13 group by day order by day asc");
+      for (let i = 13; i >= 0; i--) {
+        const dt = new Date(Date.now() - i * 86400000);
+        const key = ('0' + (dt.getMonth() + 1)).slice(-2) + '-' + ('0' + dt.getDate()).slice(-2);
+        const hit = d.rows.find(x => x.day === key);
+        days.push({ day: key, views: hit ? hit.views : 0 });
+      }
+    }
+    res.json({ videos: vids.rows.length, totalViews, totalLikes, days });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
 /* public social links of a channel */
 app.get('/api/channels/:name/links', async (req, res) => {
   try {
