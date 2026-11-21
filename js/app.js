@@ -4022,6 +4022,7 @@ const routes = [
   if (!S.myChannel) { S.myChannel = JSON.parse(JSON.stringify(YV.MY_DEFAULT)); YV.store.save(); }
   if (!S.myDelKeys) S.myDelKeys = {};
   renderMe();
+  document.getElementById('hamBtn') && (document.getElementById('hamBtn').onclick = () => document.body.classList.toggle('sb-full'));
   window.addEventListener('hashchange', navigate);
 
   /* render instantly from cache, then refresh silently in the background */
