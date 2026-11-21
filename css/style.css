@@ -1634,3 +1634,16 @@ body.has-ann main { padding-top: 138px; }
   color: #f1f1f1 !important; border-radius: 999px !important; }
 
 
+
+
+/* ══════════ v107: stats chart + hover preview polish ══════════ */
+.stats-top { display: flex; gap: 24px; margin-bottom: 14px; font-size: 15px; color: var(--txt); }
+.stats-top b { color: #fff; }
+.stats-chart { display: flex; align-items: flex-end; gap: 8px; height: 150px;
+  padding: 10px 6px 0; background: rgba(0, 0, 0, .25); border-radius: 12px; }
+.stat-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; }
+.stat-bar { width: 100%; max-width: 34px; background: linear-gradient(180deg, #3ea6ff, #ff2bd6);
+  border-radius: 6px 6px 0 0; min-height: 3px; }
+.stat-day { font-size: 10px; color: #aaa; }
+.stat-n { font-size: 10.5px; color: #f1f1f1; }
+.thumb-prev { opacity: .96; }
