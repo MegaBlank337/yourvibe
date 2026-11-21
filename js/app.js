@@ -1785,7 +1785,7 @@
       + '<div class="up-preview hide" id="upPrev"><video id="prevVid" controls muted playsinline></video><div class="up-meta" id="upMeta"></div></div>'
       + '<div class="progress-wrap hide" id="upProg"><div class="progress-label" id="upProgLbl">Uploading…</div><div class="progress-bar"><div class="progress-fill" id="upProgFill"></div></div></div>'
       + '<div class="form-err" id="upErr"></div>'
-      + '<button class="btn-neon publish" id="publish" type="submit" disabled>🚀 Publish</button>'
+      + '<button class="btn-neon publish" id="publish" type="submit">🚀 Publish</button>'
       + '</form></div></div>';
 
     const dz = $('#dz'), fileIn = $('#fileIn'), dzName = $('#dzName'),
@@ -1850,20 +1850,22 @@
       thPrev.innerHTML = '<img src="' + data + '" alt="thumbnail preview">';
       thMsg.textContent = '✅ custom thumbnail set';
     });
-    const bgSel = document.getElementById('bgSel'), bgImgIn = document.getElementById('bgImg'), bgHint = document.getElementById('bgHint');
-    window._bgImg = null;
-    bgSel.addEventListener('change', () => {
-      if (bgSel.value === 'i') bgImgIn.click();
-      else { window._bgImg = null; bgHint.textContent = 'backdrop: ' + (bgSel.value || 'none'); }
-    });
-    bgImgIn.addEventListener('change', () => {
-      const f = bgImgIn.files[0];
-      if (!f) return;
-      const rd = new FileReader();
-      rd.onload = () => { const im = new Image(); im.onload = () => { window._bgImg = im; bgHint.textContent = '🖼 backdrop image ready'; }; im.src = rd.result; };
-      rd.readAsDataURL(f);
-      bgSel.value = 'i';
-    });
+    try {
+      const bgSel = document.getElementById('bgSel'), bgImgIn = document.getElementById('bgImg'), bgHint = document.getElementById('bgHint');
+      window._bgImg = null;
+      if (bgSel) bgSel.addEventListener('change', () => {
+        if (bgSel.value === 'i') bgImgIn.click();
+        else { window._bgImg = null; bgHint.textContent = 'backdrop: ' + (bgSel.value || 'none'); }
+      });
+      if (bgImgIn) bgImgIn.addEventListener('change', () => {
+        const f = bgImgIn.files[0];
+        if (!f) return;
+        const rd = new FileReader();
+        rd.onload = () => { const im = new Image(); im.onload = () => { window._bgImg = im; bgHint.textContent = '🖼 backdrop image ready'; }; im.src = rd.result; };
+        rd.readAsDataURL(f);
+        bgSel.value = 'i';
+      });
+    } catch (e) {}
     musIn.addEventListener('change', () => {
       const f = musIn.files[0];
       if (!f) { musFile = null; musMsg.textContent = 'loops under the video'; return; }
@@ -3884,6 +3886,7 @@ const routes = [
   function navigate() {
     /* mini-player: a playing video follows you across pages */
     const curVid = document.querySelector('#yvVideo');
+    if (/^\/(upload|live|settings)/.test(location.hash.slice(1) || '/')) closeMiniPlayer();
     const tgtWatch = /^\/watch\/([\w-]+)$/.exec((location.hash.slice(1) || '/'));
     if (miniBox && tgtWatch && miniBox.vid === tgtWatch[1]) closeMiniPlayer();
     if (curVid && !curVid.paused && curVid.currentTime > 2 && !(tgtWatch && tgtWatch[1] === curVid.dataset.vid)) {
