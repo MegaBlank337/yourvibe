@@ -1597,3 +1597,38 @@ body.has-ann main { padding-top: 138px; }
 .inv-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 10px 14px; background: rgba(124, 92, 255, .1); border: 1px solid rgba(124, 92, 255, .4); border-radius: 12px; font-size: 14px; }
 .inv-btns { display: flex; gap: 8px; margin-left: auto; }
+
+
+/* ══════════ v107: YouTube-style buttons & tabs ══════════ */
+.btn-neon, .pill-btn {
+  background: #272727 !important;
+  border: none !important;
+  color: #f1f1f1 !important;
+  border-radius: 999px !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  font-family: inherit !important;
+  letter-spacing: normal !important;
+  transition: background .15s ease !important;
+}
+.btn-neon:hover, .pill-btn:hover { background: #3f3f3f !important; box-shadow: none !important; }
+.btn-neon.publish { background: #f1f1f1 !important; color: #0f0f0f !important; font-weight: 600; }
+.btn-neon.publish:hover { background: #d9d9d9 !important; }
+.pill-btn.danger { color: #ff5a5a !important; }
+.pill-btn.danger:hover { background: #3f3f3f !important; color: #ff5a5a !important; }
+.pill-btn.ghost { background: transparent !important; border: 1px solid #3f3f3f !important; }
+.chip { background: #272727 !important; border: none !important; color: #f1f1f1 !important;
+  border-radius: 8px !important; box-shadow: none !important; font-weight: 500; }
+.chip.on { background: #f1f1f1 !important; color: #0f0f0f !important; }
+.chip:hover { background: #3f3f3f !important; }
+.tab-btn { background: none !important; border: none !important; border-radius: 0 !important;
+  color: #aaaaaa !important; padding: 12px 6px !important;
+  border-bottom: 2px solid transparent !important; font-weight: 600;
+  transition: color .15s, border-color .15s !important; }
+.tab-btn.on { color: #f1f1f1 !important; background: none !important;
+  border-bottom: 2px solid #f1f1f1 !important; }
+.tab-btn:hover { color: #f1f1f1 !important; }
+.tab-count { background: #3f3f3f !important; color: #fff !important; border: none !important; }
+.rail-btn .ric { background: transparent !important; border: none !important; }
+.sub-btn, .subscribe-btn { background: #272727 !important; border: none !important;
+  color: #f1f1f1 !important; border-radius: 999px !important; }
