@@ -1169,6 +1169,7 @@
       + '<a class="pill-btn ghost" href="#/settings">⚙ Customize channel</a></div>'
       + '</div>'
       + '<div class="sched-sec" id="schedSec"></div>'
+      + '<div class="stats-sec" id="chStatsSec"><div class="sched-head">📈 Statistics</div><div class="stats-chart" id="chStatsChart"></div><div class="muted-txt" style="padding:6px 2px">loading stats…</div></div>'
       + '<div class="sched-sec" id="schedSec"></div>'
       + '<div class="ch-tabs">'
       + '<button class="tab-btn on" data-action="tab" data-tab="vids">🎬 Videos</button>'
@@ -1195,6 +1196,24 @@
       + '</div>';
     fillStreamCounts();
     renderSchedule(myName(), true);
+    renderChannelStats(myName());
+  }
+
+  /* ── channel statistics (views per day) ── */
+  async function renderChannelStats(name) {
+    const chart = document.getElementById('chStatsChart');
+    if (!chart) return;
+    try {
+      const s = await api('/api/channel-stats/' + encodeURIComponent(name));
+      const max = Math.max(1, ...s.days.map(x => x.views));
+      const parent = chart.parentElement;
+      const head = parent.querySelector('.sched-head');
+      if (head) head.textContent = '📈 Statistics — 👁 ' + fmtNum(s.totalViews) + ' views · ❤️ ' + fmtNum(s.totalLikes) + ' likes · ' + s.videos + ' videos';
+      chart.innerHTML = s.days.map(x => {
+        const h = Math.round(x.views / max * 110);
+        return '<div class="stat-col" title="' + x.views + ' views"><div class="stat-bar" style="height:' + Math.max(3, h) + 'px"></div><span class="stat-day">' + x.day + '</span><b class="stat-n">' + (x.views || '') + '</b></div>';
+      }).join('');
+    } catch (e) { chart.innerHTML = '<span class="muted-txt">stats unavailable</span>'; }
   }
 
   /* ═══════════ VIEW: CREATOR CHANNEL ═══════════ */
