@@ -1597,7 +1597,16 @@
           try {
             const s = await api('/api/videos/' + v.id + '/playurl');
             const pct = document.querySelector('#bunnyPct');
-            if (s.processing && pct) pct.textContent = 'CDN is encoding your video — ' + (s.progress || 0) + '% · starts automatically when done';
+            if (s.processing && s.play && i >= 2 && i % 4 === 2) {
+              /* probe the file itself — 403/404 means it is not on the CDN */
+              try { const pr = await fetch(s.play); if (pr.status === 403 || pr.status === 404) { if (pr.body) pr.body.cancel().catch(() => {}); const p2 = document.querySelector('#bunnyPct'); if (p2) p2.textContent = '⚠ This video file is missing on the CDN — please re-upload it.'; return; } if (pr.ok && pr.body) pr.body.cancel().catch(() => {}); } catch (e) {}
+            }
+            if (s.processing && pct) {
+              if (s.apiDown && i >= 6) { pct.textContent = '⚠ Video storage is temporarily unreachable — new uploads and this video will work again automatically. Other videos play fine.'; return; }
+              pct.textContent = s.apiDown
+                ? 'Contacting the video storage… (it is slow right now — will start automatically)'
+                : 'CDN is encoding your video — ' + (s.progress || 0) + '% · starts automatically when done';
+            }
             if (s.play && !s.processing && !/iframe\.mediadelivery/.test(s.play)) {
               s.hls = new URL(s.play).origin + '/' + v.id + '/playlist.m3u8';
             }
