@@ -1199,6 +1199,61 @@
     renderChannelStats(myName());
   }
 
+  /* ── SVG line-graph (YouTube-Analytics-style) ── */
+  function chartSVG(days, accent) {
+    accent = accent || '#3ea6ff';
+    const W = 640, H = 210, P = 34;
+    if (!days.length) return '<p class="muted-txt" style="padding:10px">No data yet</p>';
+    const max = Math.max(1, ...days.map(x => x.views));
+    const px = i => P / 2 + (i / Math.max(1, days.length - 1)) * (W - P);
+    const py = v => (H - P) - (v / max) * (H - P * 2);
+    const pts = days.map((x, i) => [px(i), py(x.views)]);
+    const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+    const area = line + ' L' + (W - P / 2) + ' ' + (H - P) + ' L' + P / 2 + ' ' + (H - P) + ' Z';
+    const uid = 'g' + Math.random().toString(36).slice(2, 7);
+    const labels = days.map((x, i) => i % 3 === 0 ? '<text x="' + px(i).toFixed(0) + '" y="' + (H - 10) + '" fill="#999" font-size="10" text-anchor="middle">' + x.day + '</text>' : '').join('');
+    const dots = pts.map(p => '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="3.5" fill="' + accent + '"/>').join('');
+    const grid = [0.25, 0.5, 0.75, 1].map(f => {
+      const y = ((H - P) - f * (H - P * 2)).toFixed(0);
+      return '<line x1="' + P / 2 + '" y1="' + y + '" x2="' + (W - P / 2) + '" y2="' + y + '" stroke="rgba(255,255,255,.06)"/>';
+    }).join('');
+    return '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '">'
+      + '<defs><linearGradient id="' + uid + '" x1="0" y1="0" x2="0" y2="1">'
+      + '<stop offset="0" stop-color="' + accent + '" stop-opacity=".4"/>'
+      + '<stop offset="1" stop-color="' + accent + '" stop-opacity="0"/></linearGradient></defs>'
+      + grid
+      + '<path d="' + area + '" fill="url(#' + uid + ')"/>'
+      + '<path d="' + line + '" fill="none" stroke="' + accent + '" stroke-width="2.5" stroke-linejoin="round"/>'
+      + dots + labels
+      + '<text x="' + (P / 2) + '" y="18" fill="#999" font-size="10">max ' + max + '</text>'
+      + '</svg>';
+  }
+
+  /* ── stats modal (owner): views per day, 14 days ── */
+  async function statsModal(id) {
+    const meta = byId(id) || {};
+    let d = document.getElementById('statsModal');
+    if (d) d.remove();
+    d = document.createElement('div');
+    d.id = 'statsModal';
+    d.innerHTML = '<div class="admin-box"><div class="admin-head"><span>📈 Statistics</span><button class="admin-close" id="stClose2">✕</button></div><div style="padding:16px" class="muted-txt">Loading…</div></div>';
+    document.body.appendChild(d);
+    d.querySelector('#stClose2').onclick = () => d.remove();
+    try {
+      const s = await api('/api/videos/' + id + '/stats');
+      const max = Math.max(1, ...s.days.map(x => x.views));
+      const bars = s.days.map(x => {
+        const h = Math.round(x.views / max * 110);
+        return '<div class="stat-col" title="' + x.views + ' views"><div class="stat-bar" style="height:' + Math.max(3, h) + 'px"></div><span class="stat-day">' + x.day + '</span><b class="stat-n">' + x.views + '</b></div>';
+      }).join('');
+      d.querySelector('.admin-box > div').innerHTML =
+        '<div class="stats-top"><span>👁 total views: <b>' + fmtNum(s.total) + '</b></span><span>❤️ likes: <b>' + fmtNum(s.likes) + '</b></span></div>'
+        + '<div class="stats-chart">' + bars + '</div>';
+    } catch (e) {
+      d.querySelector('.admin-box > div').innerHTML = '<p class="muted-txt">Failed to load stats</p>';
+    }
+  }
+
   /* ── channel statistics (views per day) ── */
   async function renderChannelStats(name) {
     const chart = document.getElementById('chStatsChart');
@@ -1372,6 +1427,7 @@
       + '<button class="act-btn" data-action="pl-add" data-id="' + v.id + '">▶＋ Playlist</button>'
       + ((S.auth && S.auth.username === v.uploader) ? '<a class="act-btn" href="' + srcOf(v) + '" download="yourvibe-' + v.id.slice(0, 8) + '" title="Download your video">⬇ Download</a>' : '')
       + ((S.auth && S.auth.username === v.uploader) ? '<button class="act-btn" data-action="subs-edit" data-id="' + v.id + '">📝 Subs</button>' : '')
+      + ((S.auth && S.auth.username === v.uploader) ? '<button class="act-btn" data-action="stats-view" data-id="' + v.id + '">📈 Stats</button>' : '')
       + ((S.auth && S.auth.username === v.uploader) ? '<button class="act-btn" data-action="collab-invite" data-id="' + v.id + '">👥 Collab</button>' : '')
       + ((S.auth && S.auth.username === v.uploader) ? '<button class="act-btn" data-action="vid-settings" data-id="' + v.id + '">⚙ Settings</button>' : '')
       + ((S.myDelKeys[v.id] || (S.auth && S.auth.username === v.uploader)) ? '<button class="act-btn danger" data-action="del" data-id="' + v.id + '">🗑 Delete</button>' : '')
@@ -3269,6 +3325,7 @@
     else if (a === 'short-comments') { e.preventDefault(); openShortComments(id); }
     else if (a === 'pl-add') { e.preventDefault(); plAddFlow(id); }
     else if (a === 'subs-edit') { e.preventDefault(); subsEditor(id); }
+    else if (a === 'stats-view') { e.preventDefault(); statsModal(id); }
     else if (a === 'collab-invite') {
       e.preventDefault();
       const who = prompt('Invite co-creator (exact username):');
