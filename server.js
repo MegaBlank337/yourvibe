@@ -305,6 +305,7 @@ async function migrate() {
   await q(`alter table videos add column if not exists subtitles jsonb`);
   await q(`alter table videos add column if not exists collabs jsonb default '[]'`);
   await q(`alter table videos add column if not exists quality_max text`);
+  await q(`insert into video_views_daily (video_id, day, views) select id, created_at::date, views from videos on conflict (video_id, day) do nothing`).catch(() => {});
   await q(`create table if not exists video_views_daily (video_id uuid, day date, views int, primary key (video_id, day))`);
   await q(`create table if not exists stream_schedule (id bigserial primary key, creator text, title text, "when" timestamptz)`);
   await q(`create table if not exists dms (id bigserial primary key, from_u text, to_u text, text text, created_at timestamptz default now(), read boolean default false)`);
@@ -1399,8 +1400,10 @@ app.get('/api/videos/:id/playurl', async (req, res) => {
     const bv = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + bg, { headers: { AccessKey: BUNNY_KEY } });
     if (bv.ok) {
       info = await bv.json();
-      if (info.thumbnailUrl) host = new URL(info.thumbnailUrl).hostname;
-      if (info.length) dur = Math.floor(info.length / 60) + ':' + String(Math.floor(info.length % 60)).padStart(2, '0');
+      try {
+        if (info.thumbnailUrl) host = new URL(info.thumbnailUrl).hostname;
+        if (info.length) dur = Math.floor(info.length / 60) + ':' + String(Math.floor(info.length % 60)).padStart(2, '0');
+      } catch (e) { console.error('playurl info:', e.message); }
     }
     if (host) {
       const play = 'https://' + host + '/' + bg + '/play_' + bestRendition(info ? info.availableResolutions : '') + '.mp4';
