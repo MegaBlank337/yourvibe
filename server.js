@@ -1423,8 +1423,11 @@ app.get('/api/videos/:id/playurl', async (req, res) => {
       metaCache.delete(req.params.id);
       return res.json({ play, hls, thumb, progress: 100 });
     }
-    /* still encoding — report real progress so the page shows a % */
-    return res.json({ processing: true, progress: info ? Math.round(info.encodeProgress || 0) : 0, play: row.video_url, thumb: row.thumb_url });
+    /* bunny API unreachable — but if we resolved a play URL before, keep playing it */
+    const saved = String(row.video_url || '');
+    if (/\.b-cdn\.net\/[0-9a-f-]{36}\/play_\d+p\.mp4/.test(saved)) return res.json({ play: saved, thumb: row.thumb_url, progress: 100 });
+    /* genuinely unresolved (encoding or storage API down) — apiDown lets the client explain why */
+    return res.json({ processing: true, progress: info ? Math.round(info.encodeProgress || 0) : 0, play: row.video_url, thumb: row.thumb_url, apiDown: true });
   } catch (e) { console.error('[playurl DEBUG] catch:', e.message); res.status(500).json({ error: e.message }); }
 });
 
