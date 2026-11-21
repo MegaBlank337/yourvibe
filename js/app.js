@@ -336,6 +336,16 @@
       + '<label class="rd"><input type="radio" name="vsCom" value="on"' + (v.comments_enabled !== false ? ' checked' : '') + '> 💬 On</label>'
       + '<label class="rd"><input type="radio" name="vsCom" value="off"' + (v.comments_enabled === false ? ' checked' : '') + '> 🚫 Off</label>'
       + '</div></div>'
+      + '<div class="field"><label>🖼 Graphics — this device only</label><div class="field-row">'
+      + '<div class="field"><label>Playback quality</label><select id="vsQualLocal">'
+      + [['auto', 'Auto (best)'], ['1080', 'Max 1080p'], ['720', 'Max 720p'], ['480', 'Max 480p']].map(q3 =>
+        '<option value="' + q3[0] + '"' + ((localStorage.getItem('yv_qual') || 'auto') === q3[0] ? ' selected' : '') + '>' + q3[1] + '</option>').join('')
+      + '</select></div>'
+      + '<div class="field"><label>Display filter</label><select id="vsFltLocal">'
+      + [['none', 'None'], ['saturate(1.55) contrast(1.12)', 'Vivid'], ['grayscale(1)', 'Mono'], ['sepia(.55) saturate(1.25)', 'Warm'], ['hue-rotate(150deg) saturate(1.3)', 'Cool'], ['invert(1) hue-rotate(180deg)', 'X-Ray']].map(f4 =>
+        '<option value="' + f4[0] + '"' + ((localStorage.getItem('yv_filter') || 'none') === f4[0] ? ' selected' : '') + '>' + f4[1] + '</option>').join('')
+      + '</select></div>'
+      + '</div><p class="muted-txt">saved on this device — applies to every video you watch here</p></div>'
       + '<div class="field"><label>Quality (bunny videos — CDN re-encodes to fit)</label>'
       + (isBunny
         ? '<select id="vsQual">'
@@ -359,10 +369,11 @@
         };
         if (!body.title) { toast('Title needed', '⚠️'); return; }
         await api('/api/videos/' + id + '/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        const qs = d.querySelector('#vsQual');
-        if (qs && isBunny) {
-          try { await api('/api/videos/' + id + '/quality', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ max: qs.value }) }); } catch (e3) {}
-        }
+        /* LOCAL graphics settings — per device, like YouTube's player gear */
+        try {
+          localStorage.setItem('yv_qual', d.querySelector('#vsQualLocal').value);
+          localStorage.setItem('yv_filter', d.querySelector('#vsFltLocal').value);
+        } catch (e4) {}
         toast('Settings saved ⚙', '✅');
         d.remove();
         await loadVideos();
@@ -1626,22 +1637,30 @@
     /* quality selector (HLS adaptive streams) */
     const qual = $('#yvQual');
     if (qual) {
+      /* local graphics preference (saved in the video settings) */
+      const prefQ = localStorage.getItem('yv_qual') || 'auto';
+      const maxH = prefQ === 'auto' ? Infinity : Number(prefQ);
       if (window._hls && window._hls.levels && window._hls.levels.length > 1) {
-        const lvls = window._hls.levels.map((l, i) => ({ i, h: l.height })).filter(x => x.h).sort((a, b) => b.h - a.h);
+        const lvls = window._hls.levels.map((l, i) => ({ i, h: l.height })).filter(x => x.h && x.h <= maxH).sort((a, b) => b.h - a.h);
         let qi = -1;
-        qual.textContent = 'AUTO';
+        qual.textContent = prefQ === 'auto' ? 'AUTO' : (prefQ + 'p');
         qual.onclick = () => {
           qi = qi + 1 > lvls.length - 1 ? -1 : qi + 1;
           if (qi < 0) { window._hls.currentLevel = -1; qual.textContent = 'AUTO'; }
           else { window._hls.currentLevel = lvls[qi].i; qual.textContent = lvls[qi].h + 'p'; }
         };
+        if (prefQ !== 'auto' && lvls.length) window._hls.currentLevel = lvls[0].i;
       } else qual.style.display = 'none';
+      const savedF = localStorage.getItem('yv_filter');
+      if (savedF && savedF !== 'none') V.style.filter = savedF;
     }
     /* display filters */
     const flt = $('#yvFilter');
     if (flt) {
       const PRESETS = [['none', '🎨'], ['saturate(1.55) contrast(1.12)', 'Vivid'], ['grayscale(1)', 'Mono'], ['sepia(.55) saturate(1.25)', 'Warm'], ['hue-rotate(150deg) saturate(1.3)', 'Cool'], ['invert(1) hue-rotate(180deg)', 'X-Ray']];
       let fi = 0;
+      const savedF2 = localStorage.getItem('yv_filter');
+      if (savedF2 && savedF2 !== 'none') { const si = PRESETS.findIndex(p2 => p2[0] === savedF2); if (si > 0) fi = si; }
       flt.onclick = () => { fi = (fi + 1) % PRESETS.length; V.style.filter = PRESETS[fi][0]; flt.title = 'Filter: ' + PRESETS[fi][1]; toast('Filter: ' + PRESETS[fi][1], '🎨'); };
     }
     /* trim + background music + subtitles */
