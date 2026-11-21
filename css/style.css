@@ -1584,3 +1584,16 @@ body.has-ann main { padding-top: 138px; }
 .lb-btn { background: rgba(8, 10, 24, .9); border: 1px solid var(--line); border-radius: 10px;
   color: var(--txt); cursor: pointer; padding: 8px 10px; font-size: 15px; margin-right: 6px; }
 .lb-btn:hover { border-color: rgba(0, 229, 255, .6); color: var(--cyan); }
+
+
+/* ══════════ v105: video settings modal, invites ══════════ */
+#vidSetModal, #subsModal { position: fixed; inset: 0; z-index: 420; display: grid; place-items: center; background: rgba(0, 0, 0, .55); }
+#vidSetModal .field { margin-bottom: 4px; }
+#vidSetModal input, #vidSetModal select, #vidSetModal textarea, #subsModal textarea { width: 100%;
+  background: rgba(10, 12, 28, .85); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--txt); padding: 9px 12px; outline: none; font-family: inherit; }
+#vidSetModal input:focus, #vidSetModal select:focus, #vidSetModal textarea:focus { border-color: rgba(0, 229, 255, .6); }
+.inv-list { display: flex; flex-direction: column; gap: 8px; }
+.inv-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; background: rgba(124, 92, 255, .1); border: 1px solid rgba(124, 92, 255, .4); border-radius: 12px; font-size: 14px; }
+.inv-btns { display: flex; gap: 8px; margin-left: auto; }
