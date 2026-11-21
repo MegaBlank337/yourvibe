@@ -1395,18 +1395,25 @@ app.get('/api/videos/:id/playurl', async (req, res) => {
     if (row.store !== 'bunny') return res.json({ play: row.video_url, thumb: row.thumb_url });
     if (!BUNNY_LIBRARY || !BUNNY_KEY) return res.json({ play: row.video_url, thumb: row.thumb_url });
 
-    let host = null, dur = null;
+    let info = null, host = null, dur = null;
     const bg = row.bunny_guid || (row.video_path || '').replace('bunny:', '');
-    console.error('[playurl DEBUG] id:', req.params.id, '| bg:', bg, '| LIB:', BUNNY_LIBRARY, '| KEY set:', !!BUNNY_KEY);
-    const bv = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + bg, { headers: { AccessKey: BUNNY_KEY } });
-    console.error('[playurl DEBUG] bunny api:', bv.status);
-    if (bv.ok) {
-      info = await bv.json();
-      try {
-        if (info.thumbnailUrl) host = new URL(info.thumbnailUrl).hostname;
-        if (info.length) dur = Math.floor(info.length / 60) + ':' + String(Math.floor(info.length % 60)).padStart(2, '0');
-      } catch (e) { console.error('playurl info:', e.message); }
-    }
+    /* bunny API: direct first, then proxied through the bot-hosting deployment
+       (bunny blocks some datacenter IPs — the proxy keeps playurl working) */
+    const BH_PROXY = process.env.BH_PROXY_URL || 'https://yourvibe.apps.bot-hosting.cloud';
+    const tryFetch = async url => {
+      try { const r = await fetch(url, { headers: { AccessKey: BUNNY_KEY } }); if (r.ok) return r.json(); console.error('[playurl] bunny api', r.status); } catch (e) { console.error('[playurl] bunny api err:', e.message); }
+      return null;
+    };
+    try {
+      info = await tryFetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + bg)
+        || await tryFetch(BH_PROXY + '/api/bunny/video/' + bg);
+      if (info) {
+        try {
+          if (info.thumbnailUrl) host = new URL(info.thumbnailUrl).hostname;
+          if (info.length) dur = Math.floor(info.length / 60) + ':' + String(Math.floor(info.length % 60)).padStart(2, '0');
+        } catch (e) {}
+      }
+    } catch (e) { console.error('[playurl] resolve err:', e.message); }
     if (host) {
       const play = 'https://' + host + '/' + bg + '/play_' + bestRendition(info ? info.availableResolutions : '') + '.mp4';
       const hls = 'https://' + host + '/' + bg + '/playlist.m3u8';
@@ -1789,6 +1796,18 @@ app.get('/api/channel-stats/:name', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'failed' }); }
 });
 
+/* bunny API proxy — for deployments where Bunny is unreachable */
+app.get('/api/bunny/video/:guid', async (req, res) => {
+  try {
+    if (!BUNNY_API_KEY || !BUNNY_LIBRARY) return res.status(500).json({ error: 'bunny not configured' });
+    if (!/^[a-f0-9-]{36}$/i.test(req.params.guid)) return res.status(400).json({ error: 'bad guid' });
+    const r = await fetch('https://video.bunnycdn.com/library/' + BUNNY_LIBRARY + '/videos/' + req.params.guid, { headers: { AccessKey: BUNNY_API_KEY } });
+    if (!r.ok) return res.status(r.status).json({ error: 'bunny ' + r.status });
+    res.json(await r.json());
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+/* public social links of a channel */
 /* public social links of a channel */
 app.get('/api/channels/:name/links', async (req, res) => {
   try {
