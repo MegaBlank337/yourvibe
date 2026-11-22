@@ -45,6 +45,11 @@ app.use(express.json({ limit: '1mb' }));
 /* ── Bunny Stream config ── */
 const BUNNY_LIBRARY = process.env.BUNNY_LIBRARY_ID || '';
 const BUNNY_KEY = process.env.BUNNY_API_KEY || '';
+/* storage-zone access: when the CDN refuses to serve (flagged accounts, propagation),
+   videos stream straight from the storage zone through /api/bmedia */
+const BUNNY_STORAGE_ZONE = process.env.BUNNY_STORAGE_ZONE || '';
+const BUNNY_STORAGE_PASSWORD = process.env.BUNNY_STORAGE_PASSWORD || '';
+const CDN_OK = new Map(); // guid -> bool (cached CDN probe, re-probed after 10 min)
 
 /* serve Bunny credentials to the browser (for direct uploads) */
 app.get('/api/bunny', (req, res) => {
@@ -1415,12 +1420,26 @@ app.get('/api/videos/:id/playurl', async (req, res) => {
       }
     } catch (e) { console.error('[playurl] resolve err:', e.message); }
     if (host) {
-      const play = 'https://' + host + '/' + bg + '/play_' + bestRendition(info ? info.availableResolutions : '') + '.mp4';
+      const rend = bestRendition(info ? info.availableResolutions : '');
+      const play = 'https://' + host + '/' + bg + '/play_' + rend + '.mp4';
       const hls = 'https://' + host + '/' + bg + '/playlist.m3u8';
       const thumb = row.thumb_url || ('https://' + host + '/' + bg + '/thumbnail.jpg');
       const durFinal = dur || null;
       await q('update videos set video_url = $2, thumb_url = $3, duration = coalesce($4, duration) where id = $1', [req.params.id, play, thumb, durFinal]);
       metaCache.delete(req.params.id);
+      /* CDN sometimes refuses to serve (flagged account, propagation) —
+         then stream the exact same files from the storage zone via our own proxy */
+      let cdnOk = CDN_OK.get(bg);
+      if (cdnOk === undefined) {
+        try { const pr = await fetch(play, { method: 'HEAD', headers: { Referer: 'https://yourvibe-9uqv.onrender.com/' }, signal: AbortSignal.timeout(4000) }); cdnOk = pr.ok; }
+        catch (e) { cdnOk = false; }
+        CDN_OK.set(bg, cdnOk);
+        if (!cdnOk) setTimeout(() => CDN_OK.delete(bg), 600000);
+      }
+      if (!cdnOk && BUNNY_STORAGE_ZONE && BUNNY_STORAGE_PASSWORD) {
+        const origin = (req.get('x-forwarded-proto') || req.protocol) + '://' + req.get('host');
+        return res.json({ play: origin + '/api/bmedia/' + bg + '/play_' + rend + '.mp4', thumb: origin + '/api/bmedia/' + bg + '/thumbnail.jpg', progress: 100, viaProxy: true });
+      }
       return res.json({ play, hls, thumb, progress: 100 });
     }
     /* bunny API unreachable — but if we resolved a play URL before, keep playing it */
@@ -1504,20 +1523,56 @@ app.get('/api/announcement', async (req, res) => {
 
 /* thumbnail proxy: bunny CDN requires a referer and 403s some img requests —
    serve thumbs same-origin instead (browser-cacheable) */
+/* neon placeholder so bunny-outage cards never look broken or hang */
+function thumbPlaceholder(res) {
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.setHeader('Cache-Control', 'public, max-age=600');
+  res.end('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff2bd6"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs><rect width="320" height="180" fill="#0a0c1c"/><rect width="320" height="180" fill="url(#g)" opacity="0.28"/><text x="160" y="102" font-size="42" text-anchor="middle" fill="#e8ecff" opacity="0.85">\u25B6</text><text x="160" y="132" font-size="11" letter-spacing="3" text-anchor="middle" fill="#e8ecff" opacity="0.55">YOURVIBE</text></svg>');
+}
 app.get('/api/thumb/:id', async (req, res) => {
   try {
     const r = await q('select thumb_url from videos where id = $1', [req.params.id]);
-    if (!r.rows.length || !r.rows[0].thumb_url) { res.status(404).end(); return; }
+    if (!r.rows.length || !r.rows[0].thumb_url) { thumbPlaceholder(res); return; }
     const url = r.rows[0].thumb_url;
     const headers = url.includes('vz-') || url.includes('b-cdn')
       ? { Referer: 'https://yourvibe-9uqv.onrender.com/' }
       : {};
-    const up = await fetch(url, { headers });
-    if (!up.ok) { res.status(up.status).end(); return; }
+    let up = null;
+    try { up = await fetch(url, Object.assign({ headers }, { signal: AbortSignal.timeout(5000) })); } catch (e) {}
+    if (!up || !up.ok) {
+      /* bunny CDN refusing? pull the thumb straight from the storage zone */
+      const g = (url.match(/[0-9a-f-]{36}/) || [])[0];
+      if (g && BUNNY_STORAGE_ZONE && BUNNY_STORAGE_PASSWORD) {
+        try {
+          const sp = await fetch('https://storage.bunnycdn.com/' + BUNNY_STORAGE_ZONE + '/' + g + '/thumbnail.jpg', { headers: { AccessKey: BUNNY_STORAGE_PASSWORD }, signal: AbortSignal.timeout(6000) });
+          if (sp.ok) { res.setHeader('Content-Type', 'image/jpeg'); res.setHeader('Cache-Control', 'public, max-age=86400'); res.end(Buffer.from(await sp.arrayBuffer())); return; }
+        } catch (e) {}
+      }
+      thumbPlaceholder(res); return;
+    }
     res.setHeader('Content-Type', up.headers.get('content-type') || 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400');
     const buf = Buffer.from(await up.arrayBuffer());
     res.end(buf);
+  } catch (e) { thumbPlaceholder(res); }
+});
+
+/* stream bunny files from the storage zone (bypasses the CDN entirely).
+   Range requests pass through so seeking works. */
+app.get('/api/bmedia/:guid/:file', async (req, res) => {
+  try {
+    if (!BUNNY_STORAGE_ZONE || !BUNNY_STORAGE_PASSWORD) return res.status(503).end();
+    if (!/^[a-f0-9-]{36}$/i.test(req.params.guid) || !/^[a-z0-9._-]+$/i.test(req.params.file)) return res.status(400).end();
+    const url = 'https://storage.bunnycdn.com/' + BUNNY_STORAGE_ZONE + '/' + req.params.guid + '/' + req.params.file;
+    const headers = { AccessKey: BUNNY_STORAGE_PASSWORD };
+    if (req.headers.range) headers.Range = req.headers.range;
+    const up = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+    if (!up.ok || !up.body) { res.status(up.status || 500).end(); return; }
+    ['content-type', 'content-length', 'content-range', 'accept-ranges'].forEach(k => { const v = up.headers.get(k); if (v) res.setHeader(k, v); });
+    if (!res.getHeader('accept-ranges')) res.setHeader('Accept-Ranges', 'bytes');
+    res.status(up.status);
+    const { Readable } = require('stream');
+    Readable.fromWeb(up.body).pipe(res);
   } catch (e) { res.status(500).end(); }
 });
 
