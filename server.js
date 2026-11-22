@@ -1431,7 +1431,7 @@ app.get('/api/videos/:id/playurl', async (req, res) => {
          then stream the exact same files from the storage zone via our own proxy */
       let cdnOk = CDN_OK.get(bg);
       if (cdnOk === undefined) {
-        try { const pr = await fetch(play, { method: 'HEAD', headers: { Referer: 'https://yourvibe-9uqv.onrender.com/' }, signal: AbortSignal.timeout(4000) }); cdnOk = pr.ok; }
+        try { const pr = await fetch(play, { headers: { Range: 'bytes=0-64', Referer: 'https://yourvibe-9uqv.onrender.com/' }, signal: AbortSignal.timeout(4000) }); cdnOk = pr.ok; if (pr.body) pr.body.cancel().catch(() => {}); }
         catch (e) { cdnOk = false; }
         CDN_OK.set(bg, cdnOk);
         if (!cdnOk) setTimeout(() => CDN_OK.delete(bg), 600000);
