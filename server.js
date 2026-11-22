@@ -1429,8 +1429,9 @@ app.get('/api/videos/:id/playurl', async (req, res) => {
       metaCache.delete(req.params.id);
       /* CDN sometimes refuses to serve (flagged account, propagation) —
          then stream the exact same files from the storage zone via our own proxy */
-      let cdnOk = CDN_OK.get(bg);
-      if (cdnOk === undefined) {
+      const forceProxy = req.query.mode === 'proxy'; /* the browser saw a 403 its region — trust it */
+      let cdnOk = forceProxy ? false : CDN_OK.get(bg);
+      if (!forceProxy && cdnOk === undefined) {
         try { const pr = await fetch(play, { headers: { Range: 'bytes=0-64', Referer: 'https://yourvibe-9uqv.onrender.com/' }, signal: AbortSignal.timeout(4000) }); cdnOk = pr.ok; if (pr.body) pr.body.cancel().catch(() => {}); }
         catch (e) { cdnOk = false; }
         CDN_OK.set(bg, cdnOk);
