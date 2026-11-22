@@ -1271,6 +1271,70 @@
     } catch (e) { chart.innerHTML = '<span class="muted-txt">stats unavailable</span>'; }
   }
 
+  /* ═══════════ VIEW: ANALYTICS — views ladder ═══════════ */
+  async function viewAnalytics() {
+    if (!await ensureVideos()) return;
+    const scope = S.anScope === 'my' ? 'my' : 'all';
+    let vids = VIDEOS.filter(v => !isStream(v));
+    if (scope === 'my' && S.auth && S.auth.token) vids = vids.filter(v => v.uploader === myName());
+    vids = vids.slice().sort((a, b) => (a.created_at ? Date.parse(a.created_at) : 8e12) - (b.created_at ? Date.parse(b.created_at) : 8e12));
+    const H = 430, topPad = 78, colW = 150, padL = 84;
+    const innerH = H - 36 - topPad;
+    const max = Math.max(1, ...vids.map(viewsOf));
+    const W = Math.max(720, padL + vids.length * colW + 40);
+    const X = i => padL + i * colW + colW / 2;
+    const Y = v => topPad + (1 - viewsOf(v) / max) * innerH;
+    /* svg layer: grid + connecting lines colored by direction */
+    let svg = '<svg class="an-lines" width="' + W + '" height="' + H + '">';
+    [0.25, 0.5, 0.75, 1].forEach(f => {
+      const gy = topPad + (1 - f) * innerH;
+      svg += '<line x1="' + (padL - 58) + '" y1="' + gy + '" x2="' + (W - 16) + '" y2="' + gy + '" class="an-grid"/>'
+        + '<text x="' + (padL - 66) + '" y="' + (gy + 4) + '" class="an-grid-n" text-anchor="end">' + fmtNum(Math.round(max * f)) + '</text>';
+    });
+    for (let i = 0; i + 1 < vids.length; i++) {
+      const up = viewsOf(vids[i + 1]) >= viewsOf(vids[i]);
+      svg += '<line x1="' + X(i) + '" y1="' + Y(vids[i]) + '" x2="' + X(i + 1) + '" y2="' + Y(vids[i + 1]) + '" class="an-link ' + (up ? 'up' : 'down') + '"/>';
+    }
+    svg += '</svg>';
+    /* columns: video on a stick + % badge on each segment */
+    const cols = vids.map((v, i) => {
+      const stickH = Math.max(4, Math.round(viewsOf(v) / max * innerH));
+      const y = Y(v);
+      let badge = '';
+      if (i > 0) {
+        const mx = (X(i) + X(i - 1)) / 2, my = (y + Y(vids[i - 1])) / 2 - 16;
+        const prev = viewsOf(vids[i - 1]);
+        if (prev === 0) badge = '<span class="an-pct new" style="left:' + mx + 'px;top:' + my + 'px">★ NEW</span>';
+        else {
+          const p = (viewsOf(v) - prev) / prev * 100;
+          const cls = p > 0.05 ? 'up' : p < -0.05 ? 'down' : 'flat';
+          badge = '<span class="an-pct ' + cls + '" style="left:' + mx + 'px;top:' + my + 'px">' + (p > 0 ? '▲ +' + p.toFixed(1) + '%' : p < 0 ? '▼ ' + p.toFixed(1) + '%' : '• 0.0%') + '</span>';
+        }
+      }
+      const d = v.created_at ? new Date(Date.parse(v.created_at)) : null;
+      const ds = d ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
+      const up = upOf(v);
+      return badge
+        + '<div class="an-col" style="left:' + X(i) + 'px;height:' + stickH + 'px">'
+        + '<span class="an-views">👁 ' + fmtNum(viewsOf(v)) + '</span>'
+        + '<a class="an-thumb" href="' + watchHref(v) + '" title="' + esc(v.title) + (up && up.name ? ' · ' + esc(up.name) : '') + '" style="--c1:' + (up.colors ? up.colors[0] : '#333') + ';--c2:' + (up.colors ? up.colors[1] : '#111') + '">' + (v.thumb_url ? '<img loading="lazy" src="' + thumbSrc(v) + '" alt="" onerror="this.style.display=\'none\'">' : '<span class="an-ghost">▶</span>') + '</a>'
+        + '<div class="an-stick"></div>'
+        + '<span class="an-date">' + ds + '</span>'
+        + '</div>';
+    }).join('');
+    main.innerHTML = '<div class="an-page">'
+      + '<div class="an-head">'
+      + '<h2 class="an-title">📊 Analytics</h2>'
+      + '<span class="an-legend"><i class="up"></i> рост просмотров <i class="down"></i> падение</span>'
+      + (S.auth && S.auth.token ? '<span class="an-chips"><button class="an-chip' + (scope === 'all' ? ' on' : '') + '" data-scope="all">Все видео</button><button class="an-chip' + (scope === 'my' ? ' on' : '') + '" data-scope="my">Мои видео</button></span>' : '')
+      + '</div>'
+      + (vids.length
+        ? '<div class="an-scroll"><div class="an-chart" style="width:' + W + 'px">' + svg + cols + '</div></div><div class="an-note">Чем выше палка — тем больше просмотров. Проценты показывают, насколько видео выросло или упало относительно предыдущего по дате. Нажми на превью, чтобы открыть видео.</div>'
+        : emptyHTML('📊', 'Пока нечего показывать', 'Опубликуй видео — и оно появится на графике.'))
+      + '</div>';
+    main.querySelectorAll('.an-chip').forEach(b => { b.onclick = () => { S.anScope = b.dataset.scope; viewAnalytics(); }; });
+  }
+
   /* ═══════════ VIEW: CREATOR CHANNEL ═══════════ */
   async function viewChannel(name) {
     if (!await ensureVideos()) return;
@@ -4049,6 +4113,7 @@ const routes = [
     [/^\/shorts\/?(.+)?$/,    m => viewShorts(m[1])],
     [/^\/subscriptions$/,     () => viewSubs()],
     [/^\/library$/,           () => viewLibrary()],
+    [/^\/analytics$/,         () => viewAnalytics()],
     [/^\/upload$/,            () => viewUpload()],
     [/^\/settings$/,          () => viewSettings()],
     [/^\/login$/,             () => viewLogin()],
@@ -4067,6 +4132,7 @@ const routes = [
     if (path.startsWith('/shorts')) return 'shorts';
     if (path.startsWith('/subscriptions')) return 'subs';
     if (path.startsWith('/library')) return 'library';
+    if (path.startsWith('/analytics')) return 'analytics';
     if (path.startsWith('/channel') || path.startsWith('/c/')) return 'channel';
     if (path.startsWith('/upload')) return 'upload';
     return '';
