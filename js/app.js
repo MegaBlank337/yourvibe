@@ -1170,6 +1170,7 @@
       + '</div>'
       + '<div class="sched-sec" id="schedSec"></div>'
       + '<div class="stats-sec" id="chStatsSec"><div class="sched-head">📈 Statistics</div><div class="stats-chart" id="chStatsChart"></div><div class="muted-txt" style="padding:6px 2px">loading stats…</div></div>'
+      + '<div class="stats-sec" id="anLadderSec"><div class="sched-head">📊 Analytics — мои видео</div><div id="anLadderBox"><div class="muted-txt" style="padding:6px 2px">loading…</div></div></div>'
       + '<div class="sched-sec" id="schedSec"></div>'
       + '<div class="ch-tabs">'
       + '<button class="tab-btn on" data-action="tab" data-tab="vids">🎬 Videos</button>'
@@ -1197,6 +1198,7 @@
     fillStreamCounts();
     renderSchedule(myName(), true);
     renderChannelStats(myName());
+    renderMyLadder(mine);
   }
 
   /* ── SVG line-graph (YouTube-Analytics-style) ── */
@@ -1271,12 +1273,9 @@
     } catch (e) { chart.innerHTML = '<span class="muted-txt">stats unavailable</span>'; }
   }
 
-  /* ═══════════ VIEW: ANALYTICS — views ladder ═══════════ */
-  async function viewAnalytics() {
-    if (!await ensureVideos()) return;
-    const scope = S.anScope === 'my' ? 'my' : 'all';
-    let vids = VIDEOS.filter(v => !isStream(v));
-    if (scope === 'my' && S.auth && S.auth.token) vids = vids.filter(v => v.uploader === myName());
+  /* ═══════════ ANALYTICS — views ladder (my videos) ═══════════ */
+  /* ladder chart: one stick per video (log scale), direction-colored link, % badge per segment */
+  function anLadderHTML(vids) {
     vids = vids.slice().sort((a, b) => (a.created_at ? Date.parse(a.created_at) : 8e12) - (b.created_at ? Date.parse(b.created_at) : 8e12));
     const H = 430, topPad = 78, colW = 150, padL = 84;
     const innerH = H - 36 - topPad;
@@ -1324,17 +1323,27 @@
         + '<span class="an-date">' + ds + '</span>'
         + '</div>';
     }).join('');
-    main.innerHTML = '<div class="an-page">'
-      + '<div class="an-head">'
-      + '<h2 class="an-title">📊 Analytics</h2>'
-      + '<span class="an-legend"><i class="up"></i> рост просмотров <i class="down"></i> падение</span>'
-      + (S.auth && S.auth.token ? '<span class="an-chips"><button class="an-chip' + (scope === 'all' ? ' on' : '') + '" data-scope="all">Все видео</button><button class="an-chip' + (scope === 'my' ? ' on' : '') + '" data-scope="my">Мои видео</button></span>' : '')
-      + '</div>'
-      + (vids.length
-        ? '<div class="an-scroll"><div class="an-chart" style="width:' + W + 'px">' + svg + cols + '</div></div><div class="an-note">Чем выше палка — тем больше просмотров (шкала логарифмическая, чтобы маленькие видео тоже были видны). Проценты показывают рост или падение относительно предыдущего видео по дате. Нажми на превью, чтобы открыть видео.</div>'
-        : emptyHTML('📊', 'Пока нечего показывать', 'Опубликуй видео — и оно появится на графике.'))
+    return vids.length
+      ? '<div class="an-scroll"><div class="an-chart" style="width:' + W + 'px">' + svg + cols + '</div></div><div class="an-note">Чем выше палка — тем больше просмотров (шкала логарифмическая). Проценты показывают рост или падение относительно предыдущего видео по дате. Нажми на превью, чтобы открыть видео.</div>'
+      : '';
+  }
+
+  /* full-page version (kept for #/analytics deep links) — my videos only */
+  async function viewAnalytics() {
+    if (!await ensureVideos()) return;
+    const vids = VIDEOS.filter(v => v.uploader === myName() && !isStream(v));
+    main.innerHTML = '<div class="an-page"><div class="an-head"><h2 class="an-title">📊 Analytics — мои видео</h2>'
+      + '<span class="an-legend"><i class="up"></i> рост <i class="down"></i> падение</span></div>'
+      + (vids.length ? anLadderHTML(vids) : emptyHTML('📊', 'Пока нечего показывать', 'Опубликуй видео — и оно появится на графике.'))
       + '</div>';
-    main.querySelectorAll('.an-chip').forEach(b => { b.onclick = () => { S.anScope = b.dataset.scope; viewAnalytics(); }; });
+  }
+
+  /* channel-page section: fills #anLadderBox on My Channel */
+  function renderMyLadder(mine) {
+    const box = document.getElementById('anLadderBox');
+    if (!box) return;
+    const vids = (mine || []).filter(v => v.uploader === myName() && !isStream(v));
+    box.innerHTML = vids.length ? anLadderHTML(vids) : '<div class="muted-txt" style="padding:8px 2px">Опубликуй первое видео — и здесь появится график просмотров.</div>';
   }
 
   /* ═══════════ VIEW: CREATOR CHANNEL ═══════════ */
