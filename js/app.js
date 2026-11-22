@@ -1661,7 +1661,7 @@
       (async () => {
         for (let i = 0; i < 120; i++) {
           try {
-            const s = await api('/api/videos/' + v.id + '/playurl');
+            let s = await api('/api/videos/' + v.id + '/playurl');
             const pct = document.querySelector('#bunnyPct');
             if (s.processing && s.play && i >= 2 && i % 4 === 2) {
               /* probe the file itself — 403/404 means it is not on the CDN */
@@ -1675,6 +1675,12 @@
             }
             if (s.play && !s.processing && /b-cdn\.net/.test(s.play)) {
               s.hls = new URL(s.play).origin + '/' + v.id + '/playlist.m3u8';
+            }
+            /* the CDN can refuse THIS visitor's region while the server saw 200 —
+               probe from the browser and switch to the storage proxy on failure */
+            if (s.play && !s.processing && /b-cdn\.net/.test(s.play) && !s.hlsChecked) {
+              s.hlsChecked = true;
+              try { const pr = await fetch(s.play); if (!pr.ok) { if (pr.body) pr.body.cancel().catch(() => {}); const ps = await api('/api/videos/' + v.id + '/playurl?mode=proxy').catch(() => null); if (ps && ps.play) s = ps; } else if (pr.body) pr.body.cancel().catch(() => {}); } catch (e) {}
             }
             if (s.hls) {
           const P = $('#yvPlayer');
