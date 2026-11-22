@@ -1283,13 +1283,15 @@
     const max = Math.max(1, ...vids.map(viewsOf));
     const W = Math.max(720, padL + vids.length * colW + 40);
     const X = i => padL + i * colW + colW / 2;
-    const Y = v => topPad + (1 - viewsOf(v) / max) * innerH;
+    /* log scale — view counts spread over 100x, linear would flatten most videos to the floor */
+    const lgm = Math.log(1 + max);
+    const Y = v => topPad + (1 - Math.log(1 + viewsOf(v)) / lgm) * innerH;
     /* svg layer: grid + connecting lines colored by direction */
     let svg = '<svg class="an-lines" width="' + W + '" height="' + H + '">';
     [0.25, 0.5, 0.75, 1].forEach(f => {
       const gy = topPad + (1 - f) * innerH;
       svg += '<line x1="' + (padL - 58) + '" y1="' + gy + '" x2="' + (W - 16) + '" y2="' + gy + '" class="an-grid"/>'
-        + '<text x="' + (padL - 66) + '" y="' + (gy + 4) + '" class="an-grid-n" text-anchor="end">' + fmtNum(Math.round(max * f)) + '</text>';
+        + '<text x="' + (padL - 66) + '" y="' + (gy + 4) + '" class="an-grid-n" text-anchor="end">' + fmtNum(Math.round(Math.exp(f * lgm) - 1)) + '</text>';
     });
     for (let i = 0; i + 1 < vids.length; i++) {
       const up = viewsOf(vids[i + 1]) >= viewsOf(vids[i]);
@@ -1298,7 +1300,7 @@
     svg += '</svg>';
     /* columns: video on a stick + % badge on each segment */
     const cols = vids.map((v, i) => {
-      const stickH = Math.max(4, Math.round(viewsOf(v) / max * innerH));
+      const stickH = Math.max(4, Math.round(Math.log(1 + viewsOf(v)) / lgm * innerH));
       const y = Y(v);
       let badge = '';
       if (i > 0) {
@@ -1329,7 +1331,7 @@
       + (S.auth && S.auth.token ? '<span class="an-chips"><button class="an-chip' + (scope === 'all' ? ' on' : '') + '" data-scope="all">Все видео</button><button class="an-chip' + (scope === 'my' ? ' on' : '') + '" data-scope="my">Мои видео</button></span>' : '')
       + '</div>'
       + (vids.length
-        ? '<div class="an-scroll"><div class="an-chart" style="width:' + W + 'px">' + svg + cols + '</div></div><div class="an-note">Чем выше палка — тем больше просмотров. Проценты показывают, насколько видео выросло или упало относительно предыдущего по дате. Нажми на превью, чтобы открыть видео.</div>'
+        ? '<div class="an-scroll"><div class="an-chart" style="width:' + W + 'px">' + svg + cols + '</div></div><div class="an-note">Чем выше палка — тем больше просмотров (шкала логарифмическая, чтобы маленькие видео тоже были видны). Проценты показывают рост или падение относительно предыдущего видео по дате. Нажми на превью, чтобы открыть видео.</div>'
         : emptyHTML('📊', 'Пока нечего показывать', 'Опубликуй видео — и оно появится на графике.'))
       + '</div>';
     main.querySelectorAll('.an-chip').forEach(b => { b.onclick = () => { S.anScope = b.dataset.scope; viewAnalytics(); }; });
