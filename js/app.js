@@ -1166,11 +1166,10 @@
       + '<div class="ch-id"><h1 class="ch-name-big rank-name"' + (rankOf(myName()) ? ' style="color:' + rankOf(myName()).hex + ';text-shadow:0 0 18px ' + rankOf(myName()).hex + '66"' : '') + '>' + nameHTML(myName()) + (rankOf(myName()) ? ' <span class="rank-chip" style="border-color:' + rankOf(myName()).hex + ';color:' + rankOf(myName()).hex + '">' + rankOf(myName()).label + '</span>' : '') + '</h1>'
       + '<div class="ch-sub">' + fmtNum(subsOfCreator(myName())) + ' subscribers · ' + fmtNum(totalViews) + ' views · ' + mine.length + ' upload' + (mine.length === 1 ? '' : 's') + '</div></div>'
       + '<div class="ch-actions">' + socialHTML(S.myChannel.links) + '<a class="btn-neon" href="#/upload">＋ Upload</a>'
-      + '<a class="pill-btn ghost" href="#/settings">⚙ Customize channel</a></div>'
+      + '<a class="pill-btn ghost" href="#/analytics">📊 Analytics</a><a class="pill-btn ghost" href="#/settings">⚙ Customize channel</a></div>'
       + '</div>'
       + '<div class="sched-sec" id="schedSec"></div>'
       + '<div class="stats-sec" id="chStatsSec"><div class="sched-head">📈 Statistics</div><div class="stats-chart" id="chStatsChart"></div><div class="muted-txt" style="padding:6px 2px">loading stats…</div></div>'
-      + '<div class="stats-sec" id="anLadderSec"><div class="sched-head">📊 Analytics — мои видео</div><div id="anLadderBox"><div class="muted-txt" style="padding:6px 2px">loading…</div></div></div>'
       + '<div class="sched-sec" id="schedSec"></div>'
       + '<div class="ch-tabs">'
       + '<button class="tab-btn on" data-action="tab" data-tab="vids">🎬 Videos</button>'
@@ -1198,7 +1197,6 @@
     fillStreamCounts();
     renderSchedule(myName(), true);
     renderChannelStats(myName());
-    renderMyLadder(mine);
   }
 
   /* ── SVG line-graph (YouTube-Analytics-style) ── */
@@ -1338,13 +1336,6 @@
       + '</div>';
   }
 
-  /* channel-page section: fills #anLadderBox on My Channel */
-  function renderMyLadder(mine) {
-    const box = document.getElementById('anLadderBox');
-    if (!box) return;
-    const vids = (mine || []).filter(v => v.uploader === myName() && !isStream(v));
-    box.innerHTML = vids.length ? anLadderHTML(vids) : '<div class="muted-txt" style="padding:8px 2px">Опубликуй первое видео — и здесь появится график просмотров.</div>';
-  }
 
   /* ═══════════ VIEW: CREATOR CHANNEL ═══════════ */
   async function viewChannel(name) {
@@ -1682,7 +1673,7 @@
                 ? 'Contacting the video storage… (it is slow right now — will start automatically)'
                 : 'CDN is encoding your video — ' + (s.progress || 0) + '% · starts automatically when done';
             }
-            if (s.play && !s.processing && !/iframe\.mediadelivery/.test(s.play)) {
+            if (s.play && !s.processing && /b-cdn\.net/.test(s.play)) {
               s.hls = new URL(s.play).origin + '/' + v.id + '/playlist.m3u8';
             }
             if (s.hls) {
