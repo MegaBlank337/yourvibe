@@ -1,26 +1,11 @@
-name: Keep API awake
-
-# Pings YourVibe every 5 minutes. If the bot-hosting container is down,
-# it is restarted automatically via the deployment power API.
+name: keepalive
 on:
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
-
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+permissions: {}
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Keep alive + auto-restart
-        env:
-          BH_TOKEN: ${{ secrets.BH_TOKEN }}
-        run: |
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" -m 60 https://yourvibe.apps.bot-hosting.cloud/api/health || echo 000)
-          echo "health: $CODE"
-          if [ "$CODE" != "200" ]; then
-            echo "site down — starting container"
-            curl -s -X POST -H "Authorization: Bearer $BH_TOKEN" -H "Content-Type: application/json" -d '{"action":"start"}' https://bot-hosting.net/api/v1/deployments/70ede578-fa43-4d73-8730-47919820b047/power || true
-            sleep 40
-          fi
-          curl -sf -m 120 https://yourvibe.apps.bot-hosting.cloud/api/health || true
-          curl -sf -m 120 https://yourvibe-9uqv.onrender.com/api/health || true
+      - run: curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" https://yourvibe-9uqv.onrender.com/api/boot || true
